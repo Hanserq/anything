@@ -3,153 +3,224 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-<title>ExamLAN Command Center</title>
+<title>ExamLAN — Admin</title>
 <link rel="stylesheet" href="/css/admin.css"/>
 </head>
 <body>
 
+<!-- ── Token Screen ──────────────────────────────────────────────────── -->
 <div id="screen-token">
-  <div class="token-card">
-    <div class="brand">🔑</div>
-    <h2>Admin Access</h2>
-    <input class="token-input" id="token-input" type="password" placeholder="Admin token…"/>
-    <button class="btn-accent" style="width:100%" id="token-submit">Enter Command Center</button>
+  <div class="token-wrap">
+    <h1>Exam<span>LAN</span></h1>
+    <p>Admin Command Center</p>
+    <input class="token-input" id="token-input" type="password" placeholder="Admin token"/>
+    <button class="btn-primary" id="token-submit">Enter →</button>
   </div>
 </div>
 
-<div id="app" style="display:none; flex-direction:column; height:100%">
-  <header class="admin-topbar">
-    <div class="topbar-logo">⚡</div>
-    <div class="topbar-title" id="topbar-title">ExamLAN</div>
-    <span id="admin-conn">○ Offline</span>
-    <button class="btn-sm outline" id="btn-back" style="display:none">Back</button>
-    <button class="btn-sm outline" id="btn-hard-reset" style="opacity:0.6;font-size:10px">Reset</button>
+<!-- ── App ───────────────────────────────────────────────────────────── -->
+<div id="app" style="display:none">
+
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="topbar-brand">Exam<span>LAN</span></div>
+    <div class="topbar-sep"></div>
+    <div class="conn-dot" id="conn-dot">Offline</div>
+    <button class="btn-ghost" id="btn-back" style="display:none">← Back</button>
+    <button class="btn-ghost" id="btn-reset" style="opacity:.4;font-size:11px">Reset</button>
   </header>
 
-  <main id="screen-sessions" style="flex:1; overflow-y:auto">
-    <div style="padding:24px; display:flex; justify-content:space-between; align-items:center">
-      <h1 style="margin:0">Active Sessions</h1>
-      <button class="btn-accent" id="create-session-btn">+ New Session</button>
+  <!-- ── Sessions List ─────────────────────────────────────────────── -->
+  <div id="screen-sessions">
+    <div class="sessions-header">
+      <h1>Sessions</h1>
+      <button class="btn-accent" id="btn-new-session">+ New Exam</button>
     </div>
-    <div class="sessions-grid" id="session-list"></div>
-  </main>
-
-  <main id="screen-control" class="dashboard-grid" style="display:none">
-    <section class="ctrl-main">
-      <!-- Status Bar -->
-      <div class="status-banner">
-        <div>
-          <div class="status-label">Session Status</div>
-          <div class="status-val" id="ctrl-status-badge">Waiting</div>
-        </div>
-        <div style="text-align:right">
-          <div class="status-label">Students</div>
-          <div class="status-val" id="live-conn">0</div>
-        </div>
-      </div>
-
-      <!-- Current Question Card -->
-      <div id="cur-q-panel" style="background:var(--panel); padding:24px; border-radius:20px; border:1px solid var(--border); margin-bottom:32px">
-        <div style="display:flex; justify-content:space-between; margin-bottom:12px">
-          <span class="status-label">Current Question</span>
-          <span id="answer-stat-display" style="color:var(--success); font-weight:700"></span>
-        </div>
-        <h2 id="cur-q-text" style="margin:0; font-size:20px">No question active</h2>
-        <div id="cur-q-options" style="margin-top:16px; color:var(--text-dim); font-size:14px"></div>
-      </div>
-
-      <!-- Big Action Buttons -->
-      <div class="action-grid">
-        <button class="cmd-btn start" id="btn-start" style="display:none">
-          <span class="icon">🚀</span>Start Exam
-        </button>
-        <button class="cmd-btn next" id="btn-next-q" style="display:none">
-          <span class="icon">➡️</span>Next Question
-        </button>
-        <button class="cmd-btn" id="btn-end-q" style="background:#475569; display:none">
-          <span class="icon">🛑</span>End Question
-        </button>
-        <button class="cmd-btn pause" id="btn-pause" style="display:none">
-          <span class="icon">⏸️</span>Pause
-        </button>
-        <button class="cmd-btn start" id="btn-resume" style="display:none">
-          <span class="icon">▶️</span>Resume
-        </button>
-        <button class="cmd-btn next" id="btn-export" style="background:#1e293b; display:none">
-          <span class="icon">📥</span>Export Results
-        </button>
-        <button class="cmd-btn end" id="btn-end" style="display:none">
-          <span class="icon">⏹️</span>Terminate Exam
-        </button>
-      </div>
-
-      <!-- Add Questions on the fly -->
-      <div id="add-q-live-box" style="margin-top:40px; padding:24px; background:rgba(255,255,255,0.02); border-radius:20px">
-        <h3 style="margin-top:0">Add Live Question</h3>
-        <div class="form-f">
-          <textarea id="q-text-input" placeholder="Type question here..." rows="2"></textarea>
-        </div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
-          <input id="opt0" placeholder="Option A"/>
-          <input id="opt1" placeholder="Option B"/>
-          <input id="opt2" placeholder="Option C"/>
-          <input id="opt3" placeholder="Option D"/>
-        </div>
-        <div style="display:flex; gap:12px; margin-top:12px">
-          <input id="correct-idx" type="number" value="0" style="width:100px" placeholder="Corr ID"/>
-          <button class="btn-sm accent" id="btn-add-live-q" style="flex:1">Push to Session</button>
-        </div>
-      </div>
-    </section>
-
-    <!-- Sidebar: Leaderboard & Activity -->
-    <aside class="dashboard-sidebar">
-      <div class="sidebar-sect">
-        <h3>🏆 Live Leaderboard</h3>
-        <div class="mini-lb" id="admin-leaderboard"></div>
-      </div>
-      <div class="sidebar-sect" style="flex:0; min-height:250px; border-top:1px solid var(--border)">
-        <h3>⚡ Live Activity</h3>
-        <div class="activity-log" id="violation-log"></div>
-      </div>
-    </aside>
-  </main>
-</div>
-
-<!-- Modal: Create Session -->
-<div class="modal-overlay hidden" id="create-modal">
-  <div class="modal-sheet">
-    <h2>New Examination</h2>
-    <div class="form-f">
-      <label>Exam Title</label>
-      <input id="session-title" placeholder="e.g. Science Midterm"/>
+    <div class="sessions-grid" id="session-list">
+      <div class="empty-state">No sessions yet. Create your first exam →</div>
     </div>
-    <div class="form-f">
-      <label>Join Code (Optional)</label>
-      <input id="session-code" placeholder="e.g. SC24" style="text-transform:uppercase; font-weight:800"/>
-    </div>
-    <div id="draft-list" style="margin-bottom:20px; max-height:150px; overflow-y:auto"></div>
-    
-    <div style="background:rgba(255,255,255,0.03); padding:16px; border-radius:12px; border:1px dashed var(--border)">
-      <h3 style="margin-top:0; font-size:14px">Bulk Import (CSV Format)</h3>
-      <p style="font-size:10px; color:var(--text-dim); margin-bottom:8px">Format: Question, Opt A, Opt B, Opt C, Opt D, CorrectIdx(0-3)</p>
-      <textarea id="bulk-import-area" style="width:100%; background:rgba(0,0,0,0.3); color:var(--text); border:1px solid var(--border); border-radius:8px; font-family:monospace; font-size:11px" rows="5" placeholder="What is 2+2, 3, 4, 5, 6, 1"></textarea>
-      <button class="btn-sm outline" id="btn-parse-bulk" style="width:100%; margin-top:8px">Process Bulk Data</button>
+  </div>
+
+  <!-- ── Control Screen ───────────────────────────────────────────── -->
+  <div id="screen-control" style="display:none">
+
+    <!-- Left: controls -->
+    <div class="ctrl-left">
+
+      <!-- Header -->
+      <div>
+        <div class="ctrl-status-block">
+          <div class="ctrl-title-big" id="ctrl-title">—</div>
+          <div class="status-chip waiting" id="ctrl-chip">Waiting</div>
+        </div>
+        <div class="ctrl-code-display" style="margin-top:10px">
+          Join Code: <strong id="ctrl-code">——</strong>
+          <span style="color:var(--text3); font-size:12px; margin-left:12px">
+            Students connect at <span id="ctrl-url"></span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-row">
+        <div class="stat-box">
+          <div class="val" id="stat-students">0</div>
+          <div class="lbl">Students connected</div>
+        </div>
+        <div class="stat-box">
+          <div class="val" id="stat-answered">—</div>
+          <div class="lbl">Answered current Q</div>
+        </div>
+        <div class="stat-box">
+          <div class="val" id="stat-qs">0</div>
+          <div class="lbl">Total questions</div>
+        </div>
+      </div>
+
+      <!-- Current Question -->
+      <div class="cur-q-card" id="cur-q-card">
+        <div class="cur-q-label">Current Question</div>
+        <div class="cur-q-text" id="cur-q-text" style="color:var(--text3)">
+          Waiting to start…
+        </div>
+        <div class="cur-q-options" id="cur-q-options"></div>
+        <div class="answer-progress" id="ans-prog-wrap" style="display:none">
+          <div class="answer-progress-fill" id="ans-prog" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div class="actions-block">
+        <div class="actions-label">Controls</div>
+        <div class="action-btns" id="action-btns">
+          <button class="action-btn start"  id="btn-start">▶ Start Exam</button>
+          <button class="action-btn next"   id="btn-next">→ Next Question</button>
+          <button class="action-btn pause"  id="btn-pause">⏸ Pause</button>
+          <button class="action-btn pause"  id="btn-resume" style="background:var(--green);color:white">▶ Resume</button>
+          <button class="action-btn export" id="btn-export">⬇ Export CSV</button>
+          <button class="action-btn danger" id="btn-end">■ End Exam</button>
+        </div>
+      </div>
+
+      <!-- Add Live Question -->
+      <div class="add-q-block">
+        <h3>Add Question to Session</h3>
+        <div class="field">
+          <label>Question</label>
+          <textarea id="lq-text" rows="2" placeholder="Type your question…"></textarea>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Option A</label><input id="lq-a" placeholder="Option A"/></div>
+          <div class="field"><label>Option B</label><input id="lq-b" placeholder="Option B"/></div>
+          <div class="field"><label>Option C</label><input id="lq-c" placeholder="Option C"/></div>
+          <div class="field"><label>Option D</label><input id="lq-d" placeholder="Option D"/></div>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Correct (0–3)</label><input id="lq-correct" type="number" value="0" min="0" max="3"/></div>
+          <div class="field"><label>Time (sec)</label><input id="lq-time" type="number" value="30" min="5"/></div>
+        </div>
+        <button class="btn-outline" id="btn-add-live-q">+ Add to Session</button>
+      </div>
+
+    </div><!-- /ctrl-left -->
+
+    <!-- Right panel: leaderboard + activity -->
+    <div class="ctrl-right">
+      <div class="right-panel-tabs">
+        <div class="rp-tab active" data-pane="lb">🏆 Leaderboard</div>
+        <div class="rp-tab" data-pane="activity">⚡ Activity</div>
+      </div>
+      <div class="right-panel-body">
+        <div id="pane-lb">
+          <div id="lb-list" style="color:var(--text3); font-size:14px">
+            Rankings appear after the exam begins…
+          </div>
+        </div>
+        <div id="pane-activity" style="display:none">
+          <div id="activity-list" style="color:var(--text3); font-size:14px">
+            Events will appear here…
+          </div>
+        </div>
+      </div>
     </div>
 
-    <hr class="divider" style="margin:20px 0; opacity:0.1"/>
-    
-    <button class="btn-sm accent" id="add-question-btn" style="width:100%">+ Add Single Question Manually</button>
-    
-    <div style="display:flex; gap:12px; margin-top:32px">
-      <button class="btn-sm" id="cancel-create" style="flex:1">Cancel</button>
-      <button class="btn-accent" id="submit-create" style="flex:1">Create Now</button>
+  </div><!-- /screen-control -->
+
+</div><!-- /app -->
+
+<!-- ── Create Session Modal ──────────────────────────────────────────── -->
+<div class="modal-backdrop" id="modal-create" style="display:none">
+  <div class="modal">
+    <h2>New Exam Session</h2>
+
+    <div class="field">
+      <label>Title</label>
+      <input id="m-title" placeholder="e.g. Chapter 4 — Electromagnetism"/>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Join Code</label>
+        <input id="m-code" placeholder="e.g. PHY101" style="text-transform:uppercase; letter-spacing:3px; font-weight:700"/>
+      </div>
+      <div class="field">
+        <label>Time / Question (sec)</label>
+        <input id="m-time" type="number" value="30" min="5"/>
+      </div>
+    </div>
+
+    <hr style="border:none; border-top:1px solid var(--border); margin:28px 0"/>
+
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px">
+      <h3 style="font-size:16px; font-weight:700">Questions</h3>
+      <span id="q-count-label" style="font-size:13px; color:var(--accent); font-weight:600">0 questions</span>
+    </div>
+
+    <!-- Bulk Import -->
+    <details style="margin-bottom:20px">
+      <summary style="cursor:pointer; font-size:13px; color:var(--text2); padding:8px 0; font-weight:600">
+        📥 Bulk Import (paste from CSV / spreadsheet)
+      </summary>
+      <div style="margin-top:12px">
+        <div class="format-hint">
+          Format per line: Question, Option A, Option B, Option C, Option D, CorrectIndex(0-3)<br/>
+          Example: What is 2+2, 3, 4, 5, 6, 1
+        </div>
+        <textarea class="bulk-area" id="bulk-area"
+          placeholder="What is 10+10, 10, 20, 30, 40, 1&#10;Capital of France, London, Paris, Berlin, Madrid, 1"></textarea>
+        <button class="btn-outline" id="btn-parse-bulk" style="margin-top:8px">Process Import →</button>
+      </div>
+    </details>
+
+    <!-- Manual single add -->
+    <div style="background:var(--surface2); border-radius:12px; padding:20px; margin-bottom:16px">
+      <div class="field">
+        <label>Question Text</label>
+        <textarea id="m-q" rows="2" placeholder="Type a question…"></textarea>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Option A</label><input id="m-a" placeholder="Option A"/></div>
+        <div class="field"><label>Option B</label><input id="m-b" placeholder="Option B"/></div>
+        <div class="field"><label>Option C</label><input id="m-c" placeholder="Option C"/></div>
+        <div class="field"><label>Option D</label><input id="m-d" placeholder="Option D"/></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Correct (0–3)</label><input id="m-correct" type="number" value="0" min="0" max="3"/></div>
+        <div class="field"><label>Points</label><input id="m-pts" type="number" value="10" min="1"/></div>
+      </div>
+      <button class="btn-outline" id="btn-add-q">+ Add Question</button>
+    </div>
+
+    <!-- Draft list -->
+    <div id="draft-list"></div>
+
+    <div class="modal-actions">
+      <button class="btn-cancel" id="btn-cancel-create">Cancel</button>
+      <button class="btn-save" id="btn-submit-create">Create Session →</button>
     </div>
   </div>
 </div>
 
-<div id="toast-container" style="position:fixed; bottom:20px; right:20px; z-index:1000"></div>
-
+<div id="toasts"></div>
 <script src="/js/ws-client.js"></script>
 <script src="/js/admin.js"></script>
 </body>
