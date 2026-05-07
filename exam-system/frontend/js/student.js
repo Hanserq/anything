@@ -317,6 +317,32 @@ function toast(msg, type = 'info') {
   setTimeout(() => t.remove(), 3500);
 }
 
+// ── Tab Switching Violation Tracking ──────────────────────────────────────────
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && studentId && sessionId && ws?.isConnected) {
+    ws.send({
+      type: 'violation',
+      data: {
+        violation_type: 'Tab Switch',
+        description: 'Student switched away from the exam tab.'
+      }
+    });
+  }
+});
+
+window.addEventListener('blur', () => {
+  // We only track blur if it's the active exam screen to prevent false positives
+  if (document.getElementById('screen-question').classList.contains('active') && ws?.isConnected) {
+    ws.send({
+      type: 'violation',
+      data: {
+        violation_type: 'Window Unfocused',
+        description: 'Student lost focus of the exam window.'
+      }
+    });
+  }
+});
+
 // ── Auto-restore on reload ────────────────────────────────────────────────────
 (async function restore() {
   const sid  = localStorage.getItem('exam_sid');

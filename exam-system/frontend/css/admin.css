@@ -324,3 +324,29 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
 .toast.err { border-left: 3px solid var(--red); }
 .toast.info { border-left: 3px solid var(--blue); }
 @keyframes toast-in { from { opacity:0; transform: translateY(12px); } to { opacity:1; transform: none; } }
+
+/* ── Students Grid ──────────────────────────────────────────────────*/
+.students-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 12px;
+}
+.stu-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.stu-card:hover { transform: translateY(-2px); border-color: var(--accent); }
+.stu-card.v-1 { border-color: var(--accent); }
+.stu-card.v-2 { border-color: var(--accent); background: rgba(245, 158, 11, 0.1); }
+.stu-card.v-3 { border-color: var(--red); background: rgba(239, 68, 68, 0.1); }
+
+.stu-card-name { font-weight: 700; font-size: 14px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stu-card-viol { font-size: 11px; font-weight: 800; margin-top: 8px; }
+.stu-card-viol.v-0 { color: var(--green); }
+.stu-card-viol.v-1, .stu-card-viol.v-2 { color: var(--accent); }
+.stu-card-viol.v-3 { color: var(--red); }

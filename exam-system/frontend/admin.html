@@ -128,12 +128,18 @@
     <div class="ctrl-right">
       <div class="right-panel-tabs">
         <div class="rp-tab active" data-pane="lb">🏆 Leaderboard</div>
+        <div class="rp-tab" data-pane="students">👥 Students</div>
         <div class="rp-tab" data-pane="activity">⚡ Activity</div>
       </div>
       <div class="right-panel-body">
         <div id="pane-lb">
           <div id="lb-list" style="color:var(--text3); font-size:14px">
             Rankings appear after the exam begins…
+          </div>
+        </div>
+        <div id="pane-students" style="display:none">
+          <div class="students-grid" id="students-grid">
+            <!-- Student cards generated here -->
           </div>
         </div>
         <div id="pane-activity" style="display:none">
@@ -216,6 +222,24 @@
     <div class="modal-actions">
       <button class="btn-cancel" id="btn-cancel-create">Cancel</button>
       <button class="btn-save" id="btn-submit-create">Create Session →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Unlock Student Modal ────────────────────────────────────────────── -->
+<div class="modal-backdrop" id="modal-unlock" style="display:none">
+  <div class="modal" style="max-width:360px; text-align:center">
+    <h2>Unlock Student</h2>
+    <p id="unlock-name" style="color:var(--text2); margin-bottom:16px; font-weight:600">Student Name</p>
+    
+    <div class="field" style="text-align:left">
+      <label>Reduce Marks (Penalty)</label>
+      <input id="u-reduce" type="number" value="0" min="0" step="0.5"/>
+    </div>
+    
+    <div class="modal-actions" style="margin-top:24px">
+      <button class="btn-cancel" id="btn-cancel-unlock">Cancel</button>
+      <button class="btn-save" id="btn-submit-unlock">Unlock →</button>
     </div>
   </div>
 </div>

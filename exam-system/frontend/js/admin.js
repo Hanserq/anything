@@ -9,6 +9,8 @@ let session  = null;   // full session object from API
 let ws       = null;
 let pollId   = null;
 let draftQs  = [];     // questions staged before create
+let studentsList = []; // list of students for the grid
+let selectedStudentToUnlock = null;
 
 const $  = id  => document.getElementById(id);
 const qs = sel => document.querySelector(sel);
@@ -234,6 +236,8 @@ function applySession(s) {
   setChip(s.status);
   setButtons(s.status);
   renderLeaderboard(s.leaderboard || []);
+  studentsList = s.students || [];
+  renderStudentGrid();
 }
 
 function setChip(status) {
@@ -327,6 +331,14 @@ function handleWS(msg) {
     totalStudents = data.connected_count;
     $('stat-students').textContent = totalStudents;
     logActivity(`${data.name} connected`, 'info');
+    
+    // Refresh full student list to get everything
+    if (session) {
+      fetch(`${API}/api/admin/sessions/${session.id}?token=${token}`)
+        .then(r => r.json())
+        .then(s => { studentsList = s.students || []; renderStudentGrid(); })
+        .catch(console.error);
+    }
   }
 
   if (type === 'student_disconnected') {
@@ -368,6 +380,11 @@ function handleWS(msg) {
 
   if (type === 'violation_alert') {
     logActivity(`⚠ ${data.student_name}: ${data.violation_type} (Strike ${data.strike_count})`, 'danger');
+    const st = studentsList.find(s => s.id === data.student_id);
+    if (st) {
+      st.strike_count = data.strike_count;
+      renderStudentGrid();
+    }
   }
 
   if (type === 'session_start') {
@@ -387,7 +404,7 @@ function handleWS(msg) {
 }
 
 // ════════════════════════════════════════════════════════════════════
-//  RIGHT PANEL TABS
+//  RIGHT PANEL TABS & GRID
 // ════════════════════════════════════════════════════════════════════
 document.querySelectorAll('.rp-tab').forEach(tab => {
   tab.onclick = () => {
@@ -395,9 +412,69 @@ document.querySelectorAll('.rp-tab').forEach(tab => {
     tab.classList.add('active');
     const pane = tab.dataset.pane;
     $('pane-lb').style.display       = pane === 'lb'       ? 'block' : 'none';
+    $('pane-students').style.display = pane === 'students' ? 'block' : 'none';
     $('pane-activity').style.display = pane === 'activity' ? 'block' : 'none';
   };
 });
+
+function renderStudentGrid() {
+  const el = $('students-grid');
+  if (!el) return;
+  if (!studentsList.length) { el.innerHTML = '<div style="color:var(--text3);font-size:14px">No students yet...</div>'; return; }
+  el.innerHTML = '';
+  
+  studentsList.forEach(s => {
+    const card = document.createElement('div');
+    const v = s.strike_count || 0;
+    const vClass = v >= 3 ? 'v-3' : (v > 0 ? `v-${v}` : 'v-0');
+    card.className = `stu-card ${vClass}`;
+    
+    card.innerHTML = `
+      <div class="stu-card-name">${s.name}</div>
+      <div style="font-size:11px; color:var(--text3)">${s.roll_number || ''}</div>
+      <div class="stu-card-viol ${vClass}">${v >= 3 ? 'LOCKED' : (v + ' Strikes')}</div>
+    `;
+    
+    card.onclick = () => {
+      selectedStudentToUnlock = s;
+      $('unlock-name').textContent = `${s.name} (${s.roll_number})`;
+      $('u-reduce').value = "0";
+      $('modal-unlock').style.display = 'flex';
+    };
+    
+    el.appendChild(card);
+  });
+}
+
+// Unlock Modal actions
+$('btn-cancel-unlock').onclick = () => { $('modal-unlock').style.display = 'none'; };
+$('modal-unlock').onclick = e => { if (e.target === $('modal-unlock')) $('modal-unlock').style.display = 'none'; };
+
+$('btn-submit-unlock').onclick = async () => {
+  if (!selectedStudentToUnlock) return;
+  const reduceMarks = parseFloat($('u-reduce').value) || 0;
+  
+  $('btn-submit-unlock').disabled = true;
+  $('btn-submit-unlock').textContent = 'Unlocking…';
+  
+  try {
+    const r = await fetch(`${API}/api/admin/sessions/${session.id}/unlock_student?student_id=${selectedStudentToUnlock.id}&reduce_marks=${reduceMarks}&token=${token}`, { method: 'POST' });
+    if (!r.ok) { toast('Failed to unlock', 'err'); return; }
+    toast(`${selectedStudentToUnlock.name} unlocked!`, 'ok');
+    
+    // Update local list
+    selectedStudentToUnlock.strike_count = 0;
+    selectedStudentToUnlock.score = Math.max(0, (selectedStudentToUnlock.score || 0) - reduceMarks);
+    renderStudentGrid();
+    
+    $('modal-unlock').style.display = 'none';
+  } catch {
+    toast('Network error', 'err');
+  } finally {
+    $('btn-submit-unlock').disabled = false;
+    $('btn-submit-unlock').textContent = 'Unlock →';
+  }
+};
 
 // ════════════════════════════════════════════════════════════════════
 //  RENDER HELPERS

@@ -401,17 +401,33 @@ async def get_violations(session_id: str, token: str = Query(...),
 
 @router.post("/sessions/{session_id}/unlock_student")
 async def unlock_student(session_id: str, student_id: str = Query(...),
+                         reduce_marks: float = Query(0.0),
                          token: str = Query(...), db: AsyncSession = Depends(get_db)):
     verify_admin(token)
     student = session_manager.get_student(session_id, student_id)
     if student:
         student.status = "active"
         student.strike_count = 0
-    await db.execute(update(Student).where(Student.id == student_id)
-                     .values(status="active", strike_count=0))
-    await db.commit()
+        student.score -= reduce_marks
+        
+    db_student = await db.get(Student, student_id)
+    if db_student:
+        db_student.status = "active"
+        db_student.strike_count = 0
+        db_student.score -= reduce_marks
+        await db.commit()
+        
     await ws_manager.send_to_student(session_id, student_id,
                                      {"type": "exam_unlocked", "data": {}})
+                                     
+    board = session_manager.compute_leaderboard(session_id)
+    state = session_manager.get_session(session_id)
+    if state:
+        await ws_manager.broadcast_admins(session_id, {
+            "type": "leaderboard_update",
+            "version": state["leaderboard_version"],
+            "data": board,
+        })
     return {"ok": True}
 
 
