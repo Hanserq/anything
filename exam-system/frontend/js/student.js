@@ -1,172 +1,167 @@
-// Student portal — updated for session_code, mobile drawer leaderboard
-const API = window.location.origin;
+// ExamLAN Student Portal — Fixed & matching admin design
+'use strict';
+
+const API     = window.location.origin;
 const WS_BASE = `ws://${window.location.host}`;
 
 let studentId  = null;
-let sessionId  = null;   // this is the DB UUID, resolved after join
-let wsClient   = null;
-let antiCheat  = null;
+let sessionId  = null;
+let ws         = null;
+let timerLoop  = null;
 let currentQ   = null;
-let timerTick  = null;
+let overlay    = null;   // wait-for-next DOM element
 
 const $ = id => document.getElementById(id);
 
-function showScreen(name) {
+// ── Screen management ─────────────────────────────────────────────────────────
+function show(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.querySelector(`.screen[data-screen="${name}"]`)?.classList.add('active');
+  $(id).classList.add('active');
 }
 
-function setConn(ok) {
-  const pill = $('conn-pill');
-  $('conn-label').textContent = ok ? 'Connected' : 'Reconnecting…';
-  pill.classList.toggle('connected', ok);
+// ── Connection indicator ──────────────────────────────────────────────────────
+function setConn(live) {
+  const p = $('conn-pill');
+  $('conn-label').textContent = live ? 'Live' : 'Reconnecting…';
+  p.classList.toggle('live', !!live);
 }
 
-// ── Join ───────────────────────────────────────────────────────────────────────
-$('join-btn').addEventListener('click', handleJoin);
-$('inp-code').addEventListener('keydown', e => { if (e.key === 'Enter') handleJoin(); });
+// ── Join ──────────────────────────────────────────────────────────────────────
+$('btn-join').onclick = doJoin;
+['inp-name', 'inp-roll', 'inp-code'].forEach(id =>
+  $(id).addEventListener('keydown', e => { if (e.key === 'Enter') doJoin(); })
+);
 
-async function handleJoin() {
+async function doJoin() {
   const name = $('inp-name').value.trim();
   const roll = $('inp-roll').value.trim();
   const code = $('inp-code').value.trim();
-  if (!name) { showToast('Enter your name', 'error'); $('inp-name').focus(); return; }
-  if (!roll) { showToast('Enter your roll number', 'error'); $('inp-roll').focus(); return; }
-  if (!code) { showToast('Enter the join code', 'error'); $('inp-code').focus(); return; }
+  if (!name) { toast('Enter your full name', 'err'); return; }
+  if (!roll) { toast('Enter your roll number', 'err'); return; }
+  if (!code) { toast('Enter the join code from your teacher', 'err'); return; }
 
-  $('join-btn').disabled = true;
-  $('join-btn').textContent = 'Joining…';
-
+  $('btn-join').disabled = true;
+  $('btn-join').textContent = 'Joining…';
   try {
-    const res = await fetch(`${API}/api/student/join`, {
+    const r = await fetch(`${API}/api/student/join`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: code, name, roll_number: roll }),
     });
-    if (!res.ok) {
-      const e = await res.json();
-      showToast(e.detail || 'Join failed', 'error');
-      return;
-    }
-    const data = await res.json();
-    studentId = data.student_id;
-    sessionId = data.session_id;   // server returns resolved UUID
+    const d = await r.json();
+    if (!r.ok) { toast(d.detail || 'Join failed — check the code', 'err'); return; }
 
-    // Persist for reconnect
+    studentId = d.student_id;
+    sessionId = d.session_id;   // server returns resolved UUID
     localStorage.setItem('exam_sid', studentId);
     localStorage.setItem('exam_sess', sessionId);
-    localStorage.setItem('exam_name', data.name);
+    localStorage.setItem('exam_name', d.name);
 
-    await ExamDB.open();
-    await ExamDB.saveState('student_id', studentId);
-    await ExamDB.saveState('session_id', sessionId);
-
-    $('waiting-name').textContent = data.name;
-    $('session-label').textContent = `Session: ${data.session_title || code}`;
-    showScreen('waiting');
+    $('wait-name').textContent = `You're in, ${d.name}!`;
+    $('wait-code').textContent = `Session: ${d.session_title || code}`;
+    show('screen-waiting');
     connectWS();
-  } catch (err) {
-    showToast('Server unreachable — check your Wi-Fi connection', 'error');
-  } finally {
-    $('join-btn').disabled = false;
-    $('join-btn').textContent = 'Join Exam →';
+  } catch { toast('Server unreachable — check Wi-Fi', 'err'); }
+  finally {
+    $('btn-join').disabled = false;
+    $('btn-join').textContent = 'Join Exam →';
   }
 }
 
-// ── WebSocket ──────────────────────────────────────────────────────────────────
+// ── WebSocket ─────────────────────────────────────────────────────────────────
 function connectWS() {
-  const url = `${WS_BASE}/ws/student/${sessionId}?student_id=${studentId}`;
-  wsClient = new ExamWSClient({
-    url,
-    onOpen: handleWSOpen,
-    onMessage: handleWSMsg,
-    onClose: () => setConn(false),
-    onError: () => setConn(false),
+  if (ws) ws.close();
+  ws = new ExamWSClient({
+    url: `${WS_BASE}/ws/student/${sessionId}?student_id=${studentId}`,
+    onOpen:    handleOpen,
+    onMessage: handleMsg,
+    onClose:   () => setConn(false),
   });
-  wsClient.connect();
+  ws.connect();
 }
 
-async function handleWSOpen() {
+async function handleOpen() {
   setConn(true);
   // Sync cached offline answers
-  const pending = await ExamDB.getPendingAnswers();
-  if (pending.length) {
-    wsClient.send({ type: 'sync_cached', data: { answers: pending } });
-    await ExamDB.clearPendingAnswers();
-  }
+  try {
+    await ExamDB.open();
+    const pending = await ExamDB.getPendingAnswers();
+    if (pending.length) {
+      ws.send({ type: 'sync_cached', data: { answers: pending } });
+      await ExamDB.clearPendingAnswers();
+    }
+  } catch {}
 }
 
-function handleWSMsg(msg) {
+function handleMsg(msg) {
   const { type, data } = msg;
   switch (type) {
     case 'connected':
       if (data.session_status === 'active' && data.current_question) {
         renderQuestion(data.current_question, data.current_question.elapsed || 0);
       } else {
-        showScreen('waiting');
+        show('screen-waiting');
       }
-      if (data.strike_count > 0 && antiCheat) antiCheat.setStrikes(data.strike_count);
       break;
     case 'session_start':
-      showToast('Exam started! First question coming…', 'info');
-      showScreen('waiting');
+      removeOverlay();
+      show('screen-waiting');
+      toast('Exam starting!', 'ok');
       break;
     case 'question_push':
-      startAntiCheat();
+      removeOverlay();
       renderQuestion(data, 0);
       break;
-    case 'question_end':
-      clearTimer();
-      revealCorrect(data.correct_index, data.correct_text);
-      break;
-    case 'leaderboard_update':
-      renderLeaderboard(msg.data);
-      break;
     case 'answer_ack':
-      markAnswered(data.question_id, data.is_correct, data.score_awarded);
+      handleAck(data);
       break;
-    case 'pause':
-      showToast('⏸ Exam paused by teacher', 'warning');
-      break;
-    case 'resume':
-      showToast('▶ Exam resumed', 'info');
+    case 'question_end':
+      // Time expired — reveal correct before overlay
+      clearTimer();
+      revealCorrect(data.correct_index);
+      setTimeout(() => showWaitOverlay(false, 0), 1500);
       break;
     case 'exam_locked':
-      lockExam(data.message);
+      clearTimer(); removeOverlay();
+      $('lock-msg').textContent = data.message || 'Your exam has been locked.';
+      show('screen-locked');
       break;
-    case 'exam_unlocked':
-      unlockExam();
+    case 'pause':
+      toast('⏸ Exam paused by teacher', 'info');
+      break;
+    case 'resume':
+      toast('▶ Exam resumed', 'ok');
       break;
     case 'exam_end':
-      endExam(msg.data.leaderboard);
-      break;
-    case 'heartbeat_ack':
+      clearTimer(); removeOverlay();
+      showResults((data || msg.data)?.leaderboard || []);
       break;
   }
 }
 
 // ── Question rendering ─────────────────────────────────────────────────────────
-function renderQuestion(q, elapsed = 0) {
+function renderQuestion(q, elapsed) {
   currentQ = q;
-  showScreen('question');
-  $('q-badge').textContent = `Q${q.index + 1} / ${q.total}`;
+  show('screen-question');
+  $('q-badge').textContent = `Q ${q.index + 1} / ${q.total}`;
   $('q-text').textContent = q.text;
 
   const grid = $('options-grid');
   grid.innerHTML = '';
+  const LABELS = ['A','B','C','D','E','F'];
   q.options.forEach((opt, i) => {
     const btn = document.createElement('button');
     btn.className = 'opt-btn';
-    btn.dataset.index = i;
-    btn.innerHTML = `<span class="opt-label">${'ABCDE'[i]}</span><span>${opt}</span>`;
-    btn.addEventListener('click', () => submitAnswer(i, btn));
+    btn.dataset.label = LABELS[i] || String(i + 1);
+    btn.dataset.idx = i;
+    btn.textContent = opt;
+    if (q.already_answered) {
+      btn.disabled = true;
+    } else {
+      btn.onclick = () => pickOption(i, btn);
+    }
     grid.appendChild(btn);
   });
-
-  // Already answered?
-  if (q.already_answered) {
-    grid.querySelectorAll('.opt-btn').forEach(b => b.disabled = true);
-  }
 
   if (q.time_limit > 0) {
     startTimer(q.time_limit, elapsed, q.start_time);
@@ -176,172 +171,163 @@ function renderQuestion(q, elapsed = 0) {
   }
 }
 
-function submitAnswer(idx, btn) {
-  if (!currentQ || document.querySelector('.opt-btn.selected')) return;
+function pickOption(idx, btn) {
+  if (document.querySelector('.opt-btn.selected')) return; // already picked
+  // Lock all options
+  document.querySelectorAll('.opt-btn').forEach(b => { b.disabled = true; });
+  btn.classList.add('selected');
 
-  const timeTaken = currentQ.time_limit > 0
+  const timeTaken = (currentQ.time_limit > 0 && currentQ.start_time)
     ? Math.min(currentQ.time_limit, Date.now() / 1000 - currentQ.start_time)
     : 0;
-
-  btn.classList.add('selected');
-  document.querySelectorAll('.opt-btn').forEach(b => b.disabled = true);
 
   const payload = {
     type: 'submit_answer',
     data: { question_id: currentQ.question_id, selected_option: idx, time_taken: timeTaken },
   };
 
-  if (wsClient?.isConnected) {
-    wsClient.send(payload);
+  if (ws?.isConnected) {
+    ws.send(payload);
   } else {
-    ExamDB.queueAnswer(payload.data);
-    showToast('Saved offline — will sync on reconnect', 'warning');
+    // Cache offline
+    ExamDB.queueAnswer(payload.data).catch(() => {});
+    toast('Saved offline — will sync on reconnect', 'info');
+    // Show overlay anyway after 2s
+    setTimeout(() => showWaitOverlay(false, 0), 2000);
   }
 }
 
-function markAnswered(questionId, isCorrect, score) {
-  if (!currentQ || currentQ.question_id !== questionId) return;
+function handleAck({ is_correct, score_awarded, question_id }) {
+  if (!currentQ || currentQ.question_id !== question_id) return;
+  clearTimer();
+
+  // Mark the selected option correct/wrong
   const sel = document.querySelector('.opt-btn.selected');
-  if (sel) sel.classList.add(isCorrect ? 'correct' : 'wrong');
-  showToast(isCorrect ? `✅ Correct! +${score.toFixed(1)} pts` : '❌ Incorrect', isCorrect ? 'success' : 'error');
+  if (sel) sel.classList.add(is_correct ? 'correct' : 'wrong');
+
+  // 2 seconds later — show the wait overlay with score
+  setTimeout(() => showWaitOverlay(is_correct, score_awarded ?? 0), 2000);
 }
 
 function revealCorrect(correctIdx) {
-  document.querySelectorAll('.opt-btn').forEach((btn, i) => {
-    btn.disabled = true;
-    if (i === correctIdx) btn.classList.add('correct-reveal');
+  document.querySelectorAll('.opt-btn').forEach((b, i) => {
+    b.disabled = true;
+    if (i === correctIdx && !b.classList.contains('correct')) {
+      b.classList.add('correct-reveal');
+    }
   });
 }
 
-// ── Timer ──────────────────────────────────────────────────────────────────────
-function startTimer(limit, elapsed, startTime) {
+// ── Wait overlay ──────────────────────────────────────────────────────────────
+function showWaitOverlay(isCorrect, score) {
+  removeOverlay();
+  const div = document.createElement('div');
+  div.className = 'wait-overlay';
+  div.id = 'wait-overlay';
+
+  // Score badge — always show something
+  const badge = document.createElement('div');
+  badge.className = `score-badge ${isCorrect ? 'correct' : 'wrong'}`;
+  if (isCorrect) {
+    badge.textContent = score > 0 ? `+${Number(score).toFixed(1)}` : '✓';
+  } else {
+    badge.textContent = '✗';
+  }
+  div.appendChild(badge);
+
+  const p = document.createElement('p');
+  p.textContent = '⏳ Waiting for next question…';
+  div.appendChild(p);
+
+  document.body.appendChild(div);
+  overlay = div;
+}
+
+function removeOverlay() {
+  if (overlay) { overlay.remove(); overlay = null; }
+  const old = document.getElementById('wait-overlay');
+  if (old) old.remove();
+}
+
+// ── Timer ─────────────────────────────────────────────────────────────────────
+function startTimer(limit, elapsed, serverStartTime) {
   clearTimer();
+  const fill = $('timer-fill');
+  const num  = $('timer-num');
+
   function tick() {
-    const rem = Math.max(0, limit - (Date.now() / 1000 - startTime));
-    $('timer-num').textContent = Math.ceil(rem);
+    const rem = Math.max(0, limit - (Date.now() / 1000 - serverStartTime));
     const pct = (rem / limit) * 100;
-    $('timer-fill').style.width = pct + '%';
-    $('timer-fill').style.background =
-      rem < 10 ? '#f43f5e' : rem < limit * 0.4 ? '#f59e0b' : '#10b981';
+    num.textContent = Math.ceil(rem);
+    fill.style.width = pct + '%';
+
+    if (rem < 8) {
+      fill.style.background = 'var(--red)';
+      num.className = 'timer-num urgent';
+    } else if (pct < 40) {
+      fill.style.background = 'var(--accent)';
+      num.className = 'timer-num warn';
+    } else {
+      fill.style.background = 'var(--green)';
+      num.className = 'timer-num';
+    }
+
     if (rem <= 0) clearTimer();
   }
   tick();
-  timerTick = setInterval(tick, 500);
+  timerLoop = setInterval(tick, 500);
 }
+
 function clearTimer() {
-  if (timerTick) { clearInterval(timerTick); timerTick = null; }
+  if (timerLoop) { clearInterval(timerLoop); timerLoop = null; }
 }
 
-// ── Leaderboard ────────────────────────────────────────────────────────────────
-function renderLeaderboard(entries) {
-  [$('lb-desktop'), $('lb-mobile'), ].forEach(el => {
-    if (!el) return;
-    el.innerHTML = '';
-    entries.slice(0, 10).forEach(e => {
-      const li = document.createElement('div');
-      li.className = `lb-item${e.student_id === studentId ? ' lb-me' : ''}`;
-      li.innerHTML = `
-        <span class="lb-rank">${['🥇','🥈','🥉'][e.rank-1] || '#'+e.rank}</span>
-        <span class="lb-name">${e.name}</span>
-        <span class="lb-score">${e.score.toFixed(1)}</span>`;
-      el.appendChild(li);
-    });
-  });
-}
-
-// Mobile drawer
-$('lb-toggle-btn').addEventListener('click', () => {
-  $('lb-drawer').classList.toggle('open');
-});
-$('lb-drawer').addEventListener('click', e => {
-  if (e.target === $('lb-drawer') || e.target.classList.contains('drawer-handle')) {
-    $('lb-drawer').classList.remove('open');
-  }
-});
-
-// ── Anti-cheat ─────────────────────────────────────────────────────────────────
-function startAntiCheat() {
-  if (antiCheat) return;
-  antiCheat = new AntiCheat({
-    maxStrikes: 3,
-    onViolation: ({ violation_type, description, strike }) => {
-      const pill = $('strike-pill');
-      pill.textContent = `⚠ Strike ${strike} — ${violation_type.replace('_', ' ')}`;
-      pill.classList.add('show');
-      setTimeout(() => pill.classList.remove('show'), 3000);
-      wsClient?.send({ type: 'violation', data: { violation_type, description } });
-    },
-    onLocked: strikes => lockExam(`Exam locked after ${strikes} violations. Contact your teacher.`),
-  });
-  antiCheat.start();
-}
-
-function lockExam(msg) {
-  antiCheat?.stop(); antiCheat = null;
-  clearTimer();
-  $('lock-msg').textContent = msg;
-  showScreen('locked');
-}
-
-function unlockExam() {
-  showScreen('question');
-  antiCheat = null;
-  startAntiCheat();
-  if (currentQ) renderQuestion(currentQ);
-}
-
-// ── Exam end ───────────────────────────────────────────────────────────────────
-function endExam(leaderboard = []) {
-  antiCheat?.stop(); antiCheat = null;
-  clearTimer();
-  showScreen('results');
+// ── Results ───────────────────────────────────────────────────────────────────
+function showResults(leaderboard) {
+  show('screen-results');
   const me = leaderboard.find(e => e.student_id === studentId);
-  if (me) {
-    $('res-rank').textContent = `#${me.rank}`;
-    $('res-score').textContent = me.score.toFixed(1);
-    $('res-correct').textContent = `${me.correct_count}`;
-  }
-  renderLeaderboard(leaderboard);
-  // Results leaderboard
-  const rl = $('lb-results');
-  if (rl) {
-    rl.innerHTML = '';
-    leaderboard.slice(0, 10).forEach(e => {
-      const li = document.createElement('div');
-      li.className = `lb-item${e.student_id === studentId ? ' lb-me' : ''}`;
-      li.innerHTML = `
-        <span class="lb-rank">${['🥇','🥈','🥉'][e.rank-1] || '#'+e.rank}</span>
-        <span class="lb-name">${e.name}</span>
-        <span class="lb-score">${e.score.toFixed(1)}</span>`;
-      rl.appendChild(li);
-    });
-  }
+  $('r-rank').textContent    = me ? `#${me.rank}` : '—';
+  $('r-score').textContent   = me ? Number(me.score || 0).toFixed(1) : '—';
+  $('r-correct').textContent = me ? (me.correct_count ?? '—') : '—';
+
+  const lb = $('r-lb');
+  lb.innerHTML = '';
+  const medals = ['🥇','🥈','🥉'];
+  leaderboard.slice(0, 10).forEach(e => {
+    const row = document.createElement('div');
+    const isMe = e.student_id === studentId;
+    row.className = `res-lb-row${isMe ? ' me' : ''}`;
+    row.innerHTML = `
+      <span class="res-lb-rank">${medals[e.rank - 1] || '#' + e.rank}</span>
+      <span class="res-lb-name">${e.name}</span>
+      <span class="res-lb-score">${Number(e.score || 0).toFixed(1)}</span>`;
+    lb.appendChild(row);
+  });
+
   localStorage.removeItem('exam_sid');
   localStorage.removeItem('exam_sess');
 }
 
-// ── Toast ──────────────────────────────────────────────────────────────────────
-function showToast(msg, type = 'info') {
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
   const t = document.createElement('div');
-  t.className = `toast toast-${type}`;
+  t.className = `toast ${type}`;
   t.textContent = msg;
-  $('toast-container').appendChild(t);
-  setTimeout(() => t.classList.add('show'), 10);
-  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 3500);
+  $('toasts').appendChild(t);
+  setTimeout(() => t.remove(), 3500);
 }
 
-// ── Auto-restore session on page reload ────────────────────────────────────────
-(async function restoreSession() {
-  await ExamDB.open();
+// ── Auto-restore on reload ────────────────────────────────────────────────────
+(async function restore() {
   const sid  = localStorage.getItem('exam_sid');
   const sess = localStorage.getItem('exam_sess');
   const name = localStorage.getItem('exam_name');
   if (sid && sess) {
-    studentId = sid;
-    sessionId = sess;
-    $('waiting-name').textContent = name || 'Student';
-    showScreen('waiting');
+    studentId = sid; sessionId = sess;
+    $('wait-name').textContent = `Welcome back, ${name || 'student'}!`;
+    $('wait-code').textContent = 'Reconnecting to session…';
+    show('screen-waiting');
     connectWS();
-    showToast('Reconnecting to your session…', 'info');
+    toast('Reconnecting…', 'info');
   }
 })();
