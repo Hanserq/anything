@@ -1,0 +1,307 @@
+import time
+import logging
+from datetime import datetime
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update, or_
+
+from database import get_db
+from models import Session, Student, Violation
+from schemas import StudentJoin
+from session_manager import session_manager
+from ws_manager import ws_manager
+from buffer import submission_buffer
+
+logger = logging.getLogger(__name__)
+router = APIRouter(tags=["student"])
+
+
+# ── Student join (REST) ───────────────────────────────────────────────────────
+
+@router.post("/api/student/join")
+async def student_join(body: StudentJoin, db: AsyncSession = Depends(get_db)):
+    # Look up session by code (case-insensitive) OR by UUID
+    code_upper = body.session_id.strip().upper()
+    result = await db.execute(
+        select(Session).where(
+            or_(Session.id == body.session_id,
+                Session.session_code == code_upper)
+        )
+    )
+    sess = result.scalar_one_or_none()
+    if not sess:
+        raise HTTPException(404, "Session not found — check your join code")
+    if sess.status == "ended":
+        raise HTTPException(400, "This session has already ended")
+
+    # Check duplicate roll number
+    existing = await db.execute(
+        select(Student).where(
+            Student.session_id == sess.id,
+            Student.roll_number == body.roll_number,
+        )
+    )
+    ex = existing.scalar_one_or_none()
+    if ex:
+        # Return existing student (reconnect scenario)
+        return {
+            "student_id": ex.id,
+            "session_id": sess.id,
+            "name": ex.name,
+            "roll_number": ex.roll_number,
+            "session_title": sess.title,
+            "session_status": sess.status,
+            "reconnect": True,
+        }
+
+    student = Student(
+        session_id=sess.id,          # Always use the UUID, not the code
+        name=body.name,
+        roll_number=body.roll_number,
+        status="joined",
+    )
+    db.add(student)
+    await db.commit()
+
+    # Register in live state if session already active
+    session_manager.add_student(sess.id, student.id, body.name, body.roll_number)
+
+    return {
+        "student_id": student.id,
+        "session_id": sess.id,
+        "name": student.name,
+        "roll_number": student.roll_number,
+        "session_title": sess.title,
+        "session_status": sess.status,
+        "reconnect": False,
+    }
+
+
+# ── Student WebSocket ─────────────────────────────────────────────────────────
+
+@router.websocket("/ws/student/{session_id}")
+async def student_ws(session_id: str, ws: WebSocket,
+                     db: AsyncSession = Depends(get_db)):
+    student_id = ws.query_params.get("student_id")
+    if not student_id:
+        await ws.close(code=4001)
+        return
+
+    db_student = await db.get(Student, student_id)
+    if not db_student or db_student.session_id != session_id:
+        await ws.close(code=4002)
+        return
+
+    await ws_manager.connect_student(session_id, student_id, ws)
+
+    # Ensure in-memory student exists
+    mem_student = session_manager.get_student(session_id, student_id)
+    if not mem_student:
+        session_manager.add_student(session_id, student_id,
+                                    db_student.name, db_student.roll_number)
+        mem_student = session_manager.get_student(session_id, student_id)
+        if mem_student:
+            mem_student.score = db_student.score
+            mem_student.correct_count = db_student.correct_count
+            mem_student.strike_count = db_student.strike_count
+            mem_student.status = db_student.status
+
+    # Update status to active
+    if mem_student:
+        mem_student.status = "active"
+    await db.execute(update(Student).where(Student.id == student_id)
+                     .values(status="active"))
+    await db.commit()
+
+    # Send current state on connect
+    state = session_manager.get_session(session_id)
+    current_q = session_manager.current_question(session_id) if state else None
+    reconnect_data: dict = {
+        "type": "connected",
+        "data": {
+            "student_id": student_id,
+            "name": db_student.name,
+            "session_status": state["status"] if state else "waiting",
+            "score": db_student.score,
+            "strike_count": db_student.strike_count,
+            "server_time": time.time(),
+        }
+    }
+    if current_q and state and state["status"] == "active":
+        elapsed = time.time() - current_q.start_time
+        reconnect_data["data"]["current_question"] = {
+            "question_id": current_q.question_id,
+            "index": current_q.index,
+            "total": len(state["questions"]),
+            "text": current_q.text,
+            "options": current_q.options,
+            "time_limit": current_q.time_limit,
+            "elapsed": elapsed,
+            "start_time": current_q.start_time,
+            "question_type": current_q.question_type,
+            "already_answered": current_q.question_id in (mem_student.answered_ids if mem_student else set()),
+        }
+    await ws.send_json(reconnect_data)
+
+    # Notify admin
+    await ws_manager.broadcast_admins(session_id, {
+        "type": "student_connected",
+        "data": {"student_id": student_id, "name": db_student.name,
+                 "connected_count": ws_manager.connected_count(session_id)}
+    })
+
+    try:
+        while True:
+            msg = await ws.receive_json()
+            msg_type = msg.get("type")
+            data = msg.get("data", {})
+
+            if msg_type == "submit_answer":
+                await _handle_submit(session_id, student_id, data, db)
+
+            elif msg_type == "violation":
+                await _handle_violation(session_id, student_id, data, db)
+
+            elif msg_type == "heartbeat":
+                await ws.send_json({"type": "heartbeat_ack",
+                                    "server_time": time.time()})
+
+            elif msg_type == "sync_cached":
+                # Student sending cached answers after reconnect
+                for cached in data.get("answers", []):
+                    await _handle_submit(session_id, student_id, cached, db,
+                                         is_cached=True)
+
+    except WebSocketDisconnect:
+        ws_manager.disconnect_student(session_id, student_id)
+        mem_st = session_manager.get_student(session_id, student_id)
+        if mem_st and mem_st.status not in ("locked", "submitted"):
+            mem_st.status = "disconnected"
+        await db.execute(update(Student).where(Student.id == student_id)
+                         .values(status="disconnected"))
+        await db.commit()
+        await ws_manager.broadcast_admins(session_id, {
+            "type": "student_disconnected",
+            "data": {"student_id": student_id, "name": db_student.name,
+                     "connected_count": ws_manager.connected_count(session_id)}
+        })
+
+
+async def _handle_submit(session_id: str, student_id: str, data: dict,
+                          db: AsyncSession, is_cached: bool = False):
+    question_id = data.get("question_id")
+    selected = data.get("selected_option")
+    time_taken = float(data.get("time_taken", 0))
+
+    result = session_manager.record_answer(
+        session_id, student_id, question_id, selected, time_taken
+    )
+    if result is None:
+        return   # duplicate or invalid
+
+    result["is_cached"] = is_cached
+    accepted = await submission_buffer.add(result)
+    if not accepted:
+        return
+
+    # Ack to student
+    await ws_manager.send_to_student(session_id, student_id, {
+        "type": "answer_ack",
+        "data": {
+            "question_id": question_id,
+            "is_correct": result["is_correct"],
+            "score_awarded": result["score_awarded"],
+        }
+    })
+
+    # Notify admin of live stats + student's new score
+    state = session_manager.get_session(session_id)
+    if state:
+        answered = sum(
+            1 for st in state["students"].values()
+            if question_id in st.answered_ids
+        )
+        answering_student = state["students"].get(student_id)
+        await ws_manager.broadcast_admins(session_id, {
+            "type": "answer_stat",
+            "data": {
+                "question_id": question_id,
+                "answered_count": answered,
+                "total_students": len(state["students"]),
+                "student_id": student_id,
+                "score": answering_student.score if answering_student else 0,
+            }
+        })
+
+
+async def _handle_violation(session_id: str, student_id: str, data: dict,
+                              db: AsyncSession):
+    vtype = data.get("violation_type", "unknown")
+    strikes = session_manager.record_violation(session_id, student_id)
+
+    db_student = await db.get(Student, student_id)
+    viol = Violation(
+        session_id=session_id, student_id=student_id,
+        violation_type=vtype, description=data.get("description", ""),
+        strike_number=strikes,
+    )
+    db.add(viol)
+    await db.execute(update(Student).where(Student.id == student_id)
+                     .values(strike_count=strikes))
+    await db.commit()
+
+    state = session_manager.get_session(session_id)
+    max_strikes = state["config"].get("max_strikes", 3) if state else 3
+
+    await ws_manager.broadcast_admins(session_id, {
+        "type": "violation_alert",
+        "data": {
+            "student_id": student_id,
+            "student_name": db_student.name if db_student else "?",
+            "roll_number": db_student.roll_number if db_student else "?",
+            "violation_type": vtype,
+            "strike_count": strikes,
+            "max_strikes": max_strikes,
+            "occurred_at": datetime.utcnow().isoformat(),
+        }
+    })
+
+    mem_student = session_manager.get_student(session_id, student_id)
+    if mem_student and mem_student.status == "locked":
+        await ws_manager.send_to_student(session_id, student_id, {
+            "type": "exam_locked",
+            "data": {"strikes": strikes,
+                     "message": "Exam locked due to violations. Contact admin."}
+        })
+        await db.execute(update(Student).where(Student.id == student_id)
+                         .values(status="locked"))
+        await db.commit()
+
+
+# ── Admin WebSocket ───────────────────────────────────────────────────────────
+
+@router.websocket("/ws/admin/{session_id}")
+async def admin_ws(session_id: str, ws: WebSocket):
+    token = ws.query_params.get("token")
+    import os
+    if token != os.getenv("ADMIN_TOKEN", "exam-admin-secret"):
+        await ws.close(code=4003)
+        return
+
+    await ws_manager.connect_admin(session_id, ws)
+    try:
+        while True:
+            msg = await ws.receive_json()
+            # Admin can send heartbeat or request leaderboard
+            if msg.get("type") == "request_leaderboard":
+                state = session_manager.get_session(session_id)
+                if state:
+                    board = session_manager.compute_leaderboard(session_id)
+                    await ws.send_json({
+                        "type": "leaderboard_update",
+                        "version": state["leaderboard_version"],
+                        "data": board,
+                    })
+    except WebSocketDisconnect:
+        ws_manager.disconnect_admin(session_id, ws)

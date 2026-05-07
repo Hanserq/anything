@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="description" content="ExamLAN — Student Exam Portal"/>
+<meta name="theme-color" content="#080f1e"/>
+<title>ExamLAN · Student</title>
+<link rel="manifest" href="/manifest.json"/>
+<link rel="stylesheet" href="/css/student.css"/>
+</head>
+<body>
+
+<!-- Connection status pill -->
+<div class="conn-pill" id="conn-pill">
+  <span class="conn-dot"></span>
+  <span id="conn-label">Not connected</span>
+</div>
+
+<!-- Strike warning -->
+<div class="strike-pill" id="strike-pill"></div>
+
+<!-- ═══════════════════════════════════════════════════════
+     JOIN SCREEN
+════════════════════════════════════════════════════════ -->
+<div class="screen active" data-screen="join">
+  <div class="join-wrap">
+    <div class="join-brand">
+      <div class="brand-icon">📝</div>
+      <h1>Exam<span>LAN</span></h1>
+      <p>Offline classroom exam system</p>
+    </div>
+
+    <div class="join-card">
+      <div class="field">
+        <label for="inp-name">Full Name</label>
+        <input id="inp-name" type="text" placeholder="e.g. Arjun Sharma"
+               autocomplete="name" inputmode="text"/>
+      </div>
+      <div class="field">
+        <label for="inp-roll">Roll Number</label>
+        <input id="inp-roll" type="text" placeholder="e.g. CS2024-01" autocomplete="off"/>
+      </div>
+      <div class="field">
+        <label for="inp-code">Join Code</label>
+        <input id="inp-code" type="text" placeholder="Enter code from teacher (e.g. CS101)"
+               autocomplete="off" autocapitalize="characters" style="letter-spacing:2px;font-weight:700;font-size:18px"/>
+      </div>
+      <button class="btn-join" id="join-btn">Join Exam →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     WAITING SCREEN
+════════════════════════════════════════════════════════ -->
+<div class="screen" data-screen="waiting">
+  <div class="waiting-wrap">
+    <div class="waiting-anim">
+      <div class="ring"></div>
+      <div class="ring"></div>
+      <div class="dot">⏳</div>
+    </div>
+    <h2>Welcome, <span class="waiting-name" id="waiting-name">Student</span>!</h2>
+    <p>You're in. Waiting for the teacher to start the exam…</p>
+    <div class="waiting-sub" id="session-label"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     QUESTION SCREEN
+════════════════════════════════════════════════════════ -->
+<div class="screen screen-question" data-screen="question" style="padding-top:60px">
+  <div class="exam-layout" id="exam-layout">
+    <!-- Main question area -->
+    <div>
+      <div class="exam-top">
+        <span class="q-badge" id="q-badge">Q1 / ?</span>
+        <div class="timer-block">
+          <span class="timer-num" id="timer-num">—</span>
+          <div class="timer-track"><div class="timer-fill" id="timer-fill"></div></div>
+        </div>
+      </div>
+
+      <div class="question-card">
+        <p class="q-text" id="q-text">Loading question…</p>
+        <div class="options-grid" id="options-grid"></div>
+      </div>
+    </div>
+
+    <!-- Desktop sidebar leaderboard -->
+    <div class="exam-sidebar">
+      <div class="sidebar-lbl">🏆 Live Leaderboard</div>
+      <div class="lb-list" id="lb-desktop"></div>
+    </div>
+  </div>
+
+  <!-- Mobile leaderboard toggle -->
+  <button class="lb-toggle-btn" id="lb-toggle-btn" title="Leaderboard">🏆</button>
+</div>
+
+<!-- Mobile leaderboard drawer -->
+<div class="lb-drawer" id="lb-drawer">
+  <div class="drawer-handle"></div>
+  <div class="sidebar-lbl">🏆 Live Leaderboard</div>
+  <div class="lb-list" id="lb-mobile"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     LOCKED SCREEN
+════════════════════════════════════════════════════════ -->
+<div class="screen" data-screen="locked">
+  <div class="locked-card">
+    <span class="lock-emoji">🔒</span>
+    <h2>Exam Locked</h2>
+    <p id="lock-msg">Your exam has been locked due to violations.</p>
+    <p style="color:#475569;font-size:13px;margin-top:12px">Please raise your hand and contact your teacher.</p>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════
+     RESULTS SCREEN
+════════════════════════════════════════════════════════ -->
+<div class="screen" data-screen="results">
+  <div class="results-card">
+    <div class="results-hero">
+      <h2>🎉 Exam Complete!</h2>
+      <p style="color:#94a3b8;margin-top:6px">Here's how you did</p>
+      <div class="result-badges">
+        <div class="result-badge">
+          <div class="val" id="res-rank">#—</div>
+          <div class="lbl">Your Rank</div>
+        </div>
+        <div class="result-badge">
+          <div class="val" id="res-score">—</div>
+          <div class="lbl">Points</div>
+        </div>
+        <div class="result-badge">
+          <div class="val" id="res-correct">—</div>
+          <div class="lbl">Correct</div>
+        </div>
+      </div>
+    </div>
+    <div class="sidebar-lbl">Final Leaderboard</div>
+    <div class="lb-list" id="lb-results"></div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-container"></div>
+
+<script src="/js/ws-client.js"></script>
+<script src="/js/db.js"></script>
+<script src="/js/anticheat.js"></script>
+<script src="/js/student.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
