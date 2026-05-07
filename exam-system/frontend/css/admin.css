@@ -234,6 +234,7 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
 .lb-name { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lb-roll { font-size: 11px; color: var(--text3); }
 .lb-score { font-weight: 800; font-size: 18px; color: var(--accent); }
+.lb-time { font-size: 12px; color: var(--text3); font-family: monospace; width: 45px; text-align: right; }
 
 /* Activity log */
 .act-entry { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 12px; }
@@ -350,3 +351,43 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
 .stu-card-viol.v-0 { color: var(--green); }
 .stu-card-viol.v-1, .stu-card-viol.v-2 { color: var(--accent); }
 .stu-card-viol.v-3 { color: var(--red); }
+
+/* ── Mobile Responsiveness ──────────────────────────────────────────*/
+@media (max-width: 900px) {
+  #screen-control {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .ctrl-left {
+    padding: 24px;
+    gap: 24px;
+    overflow-y: visible;
+  }
+  .ctrl-right {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+  .stats-row {
+    flex-direction: column;
+  }
+  .sessions-header {
+    flex-direction: column;
+    gap: 16px;
+  }
+  .sessions-grid {
+    grid-template-columns: 1fr;
+  }
+  .cur-q-card {
+    padding: 20px;
+  }
+  .add-q-block {
+    padding: 20px;
+  }
+  .field-row {
+    grid-template-columns: 1fr;
+  }
+}
+

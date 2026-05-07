@@ -62,6 +62,7 @@ async def create_session(body: SessionCreate, db: AsyncSession = Depends(get_db)
         randomize_questions=body.randomize_questions,
         randomize_options=body.randomize_options,
         max_strikes=body.max_strikes,
+        pacing_mode=body.pacing_mode,
     )
     db.add(sess)
     await db.flush()
@@ -128,6 +129,7 @@ async def get_session(session_id: str, token: str = Query(...),
         "randomize_questions": sess.randomize_questions,
         "randomize_options": sess.randomize_options,
         "max_strikes": sess.max_strikes,
+        "pacing_mode": sess.pacing_mode,
         "created_at": sess.created_at.isoformat(),
         "started_at": sess.started_at.isoformat() if sess.started_at else None,
         "students": [
@@ -147,6 +149,21 @@ async def get_session(session_id: str, token: str = Query(...),
         "total_questions": len(questions),
         "session_status_live": live_state["status"] if live_state else sess.status,
     }
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str, token: str = Query(...),
+                         db: AsyncSession = Depends(get_db)):
+    verify_admin(token)
+    sess = await db.get(Session, session_id)
+    if not sess:
+        raise HTTPException(404, "Session not found")
+        
+    await db.delete(sess)
+    await db.commit()
+    
+    session_manager.remove_session(session_id)
+    return {"status": "deleted"}
 
 
 @router.post("/sessions/{session_id}/questions")
@@ -204,6 +221,7 @@ async def start_session(session_id: str, token: str = Query(...),
         "randomize_questions": sess.randomize_questions,
         "randomize_options": sess.randomize_options,
         "max_strikes": sess.max_strikes,
+        "pacing_mode": sess.pacing_mode,
     }
 
     # Restore from checkpoint or fresh init
@@ -212,6 +230,10 @@ async def start_session(session_id: str, token: str = Query(...),
             session_id, sess.checkpoint_data, questions, config)
     else:
         session_manager.create_session(session_id, questions, config)
+        # Load all joined students from DB so they can answer
+        stud_r = await db.execute(select(Student).where(Student.session_id == session_id))
+        for s in stud_r.scalars().all():
+            session_manager.add_student(session_id, s.id, s.name, s.roll_number)
 
     await db.execute(update(Session).where(Session.id == session_id)
                      .values(status="active", started_at=datetime.utcnow()))
@@ -222,6 +244,28 @@ async def start_session(session_id: str, token: str = Query(...),
         "data": {"session_id": session_id, "title": sess.title,
                  "server_time": time.time()}
     })
+
+    state = session_manager.get_session(session_id)
+    if state and state["config"].get("pacing_mode", "auto") == "auto":
+        # Push Q1 to everyone connected
+        for student_id, st in state["students"].items():
+            st.current_index = 0
+            nxt_q = session_manager.get_student_question(session_id, student_id)
+            if nxt_q:
+                await ws_manager.send_to_student(session_id, student_id, {
+                    "type": "question_push",
+                    "data": {
+                        "question_id": nxt_q.question_id,
+                        "index": nxt_q.index,
+                        "total": len(state["questions"]),
+                        "text": nxt_q.text,
+                        "options": nxt_q.options,
+                        "time_limit": nxt_q.time_limit,
+                        "start_time": time.time(),
+                        "question_type": nxt_q.question_type,
+                        "pacing_mode": "auto",
+                    }
+                })
     return {"status": "active"}
 
 
@@ -441,16 +485,16 @@ async def export_results(session_id: str, token: str = Query(...),
                          .order_by(Result.rank))
     results = r.scalars().all()
 
-    output = io.StringIO()
+    output = io.StringIO(newline='')
     writer = csv.writer(output)
     writer.writerow(["Rank", "Name", "Roll No", "Score",
-                     "Correct", "Total Q", "Violations", "Status"])
+                     "Correct", "Total Q", "Violations"])
     for res in results:
         s = await db.get(Student, res.student_id)
         writer.writerow([
             res.rank, s.name if s else "?", s.roll_number if s else "?",
             res.final_score, res.correct_count, res.total_questions,
-            res.violations_count, s.status if s else "?",
+            res.violations_count
         ])
 
     output.seek(0)

@@ -19,6 +19,9 @@ class StudentState:
     strike_count: int = 0
     status: str = "joined"          # joined/active/disconnected/locked/submitted
     answered_ids: set = field(default_factory=set)
+    current_index: int = 0
+    joined_at: float = field(default_factory=time.time)
+    finished_at: Optional[float] = None
 
     def to_leaderboard_entry(self, rank: int) -> dict:
         return {
@@ -29,6 +32,7 @@ class StudentState:
             "score": self.score,
             "correct_count": self.correct_count,
             "status": self.status,
+            "time_taken": (self.finished_at - self.joined_at) if self.finished_at else None,
         }
 
 
@@ -139,7 +143,8 @@ class SessionManager:
         if not student or question_id in student.answered_ids:
             return None
 
-        q: QuestionState = state["current_question"]
+        q: QuestionState = state["questions"][student.current_index] if student.current_index < len(state["questions"]) else None
+
         if not q or q.question_id != question_id:
             return None
 
@@ -159,12 +164,20 @@ class SessionManager:
             student.score += score_awarded
             student.correct_count += 1
 
+        # Check if finished
+        if q.index >= len(state["questions"]) - 1:
+            student.finished_at = time.time()
+            student.status = "submitted"
+        else:
+            student.current_index += 1
+
         return {
             "session_id": session_id,
             "student_id": student_id,
             "question_id": question_id,
             "selected_option": selected_shuffled,
             "actual_option": actual_option,
+            "correct_shuffled": q.correct_shuffled_index,
             "is_correct": is_correct,
             "score_awarded": score_awarded,
             "time_taken": time_taken,
@@ -189,6 +202,14 @@ class SessionManager:
     def current_question(self, session_id: str) -> Optional[QuestionState]:
         state = self._sessions.get(session_id)
         return state["current_question"] if state else None
+
+    def get_student_question(self, session_id: str, student_id: str) -> Optional[QuestionState]:
+        state = self._sessions.get(session_id)
+        if not state: return None
+        student = state["students"].get(student_id)
+        if not student: return None
+        if student.current_index >= len(state["questions"]): return None
+        return state["questions"][student.current_index]
 
     # ── Leaderboard ───────────────────────────────────────────────────────────
 

@@ -22,6 +22,7 @@ class Session(Base):
     randomize_questions = Column(Boolean, default=True)
     randomize_options = Column(Boolean, default=True)
     max_strikes = Column(Integer, default=3)
+    pacing_mode = Column(String, default="auto")
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)

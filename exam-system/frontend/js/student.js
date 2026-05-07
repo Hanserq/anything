@@ -126,6 +126,10 @@ function handleMsg(msg) {
       $('lock-msg').textContent = data.message || 'Your exam has been locked.';
       show('screen-locked');
       break;
+    case 'exam_unlocked':
+      toast('Your exam has been unlocked by the admin.', 'ok');
+      show('screen-waiting');
+      break;
     case 'pause':
       toast('⏸ Exam paused by teacher', 'info');
       break;
@@ -197,7 +201,7 @@ function pickOption(idx, btn) {
   }
 }
 
-function handleAck({ is_correct, score_awarded, question_id }) {
+function handleAck({ is_correct, score_awarded, question_id, correct_index }) {
   if (!currentQ || currentQ.question_id !== question_id) return;
   clearTimer();
 
@@ -205,8 +209,16 @@ function handleAck({ is_correct, score_awarded, question_id }) {
   const sel = document.querySelector('.opt-btn.selected');
   if (sel) sel.classList.add(is_correct ? 'correct' : 'wrong');
 
-  // 2 seconds later — show the wait overlay with score
-  setTimeout(() => showWaitOverlay(is_correct, score_awarded ?? 0), 2000);
+  if (!is_correct && correct_index !== undefined) {
+    revealCorrect(correct_index);
+  }
+
+  if (currentQ.pacing_mode === 'auto') {
+    // Just show the right answer for a sec, the server will push the next question immediately
+  } else {
+    // 1.5 seconds later — show the wait overlay with score
+    setTimeout(() => showWaitOverlay(is_correct, score_awarded ?? 0), 1500);
+  }
 }
 
 function revealCorrect(correctIdx) {
@@ -282,6 +294,13 @@ function clearTimer() {
   if (timerLoop) { clearInterval(timerLoop); timerLoop = null; }
 }
 
+function formatTime(sec) {
+  if (!sec) return '';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
 // ── Results ───────────────────────────────────────────────────────────────────
 function showResults(leaderboard) {
   show('screen-results');
@@ -300,7 +319,8 @@ function showResults(leaderboard) {
     row.innerHTML = `
       <span class="res-lb-rank">${medals[e.rank - 1] || '#' + e.rank}</span>
       <span class="res-lb-name">${e.name}</span>
-      <span class="res-lb-score">${Number(e.score || 0).toFixed(1)}</span>`;
+      <span class="res-lb-score">${Number(e.score || 0).toFixed(1)}</span>
+      <span class="res-lb-time">${formatTime(e.time_taken)}</span>`;
     lb.appendChild(row);
   });
 

@@ -49,9 +49,12 @@
 
       <!-- Header -->
       <div>
-        <div class="ctrl-status-block">
-          <div class="ctrl-title-big" id="ctrl-title">—</div>
-          <div class="status-chip waiting" id="ctrl-chip">Waiting</div>
+        <div class="ctrl-status-block" style="display:flex; justify-content:space-between; width:100%">
+          <div style="display:flex; align-items:center; gap:24px">
+            <div class="ctrl-title-big" id="ctrl-title">—</div>
+            <div class="status-chip waiting" id="ctrl-chip">Waiting</div>
+          </div>
+          <button class="btn-ghost" id="btn-delete-session" style="color:var(--red); border-color:var(--red); height:32px; padding:0 12px; font-size:12px; align-self:center;">🗑 Delete Session</button>
         </div>
         <div class="ctrl-code-display" style="margin-top:10px">
           Join Code: <strong id="ctrl-code">——</strong>
@@ -83,6 +86,7 @@
         <div class="cur-q-text" id="cur-q-text" style="color:var(--text3)">
           Waiting to start…
         </div>
+        <div id="waiting-questions-list" style="display:none; margin-top:20px; font-size:13px; color:var(--text2); max-height:200px; overflow-y:auto; border-top:1px solid var(--border); padding-top:16px;"></div>
         <div class="cur-q-options" id="cur-q-options"></div>
         <div class="answer-progress" id="ans-prog-wrap" style="display:none">
           <div class="answer-progress-fill" id="ans-prog" style="width:0%"></div>
@@ -94,7 +98,6 @@
         <div class="actions-label">Controls</div>
         <div class="action-btns" id="action-btns">
           <button class="action-btn start"  id="btn-start">▶ Start Exam</button>
-          <button class="action-btn next"   id="btn-next">→ Next Question</button>
           <button class="action-btn pause"  id="btn-pause">⏸ Pause</button>
           <button class="action-btn pause"  id="btn-resume" style="background:var(--green);color:white">▶ Resume</button>
           <button class="action-btn export" id="btn-export">⬇ Export CSV</button>
@@ -173,6 +176,12 @@
         <input id="m-time" type="number" value="30" min="5"/>
       </div>
     </div>
+    <div class="field" style="margin-top:16px; display:none">
+      <label>Pacing Mode</label>
+      <select id="m-pacing" style="width:100%; padding:12px 16px; background:var(--bg); border:1px solid var(--border); border-radius:8px; color:var(--text); font-size:14px; outline:none">
+        <option value="auto" selected>Auto (Student Paced)</option>
+      </select>
+    </div>
 
     <hr style="border:none; border-top:1px solid var(--border); margin:28px 0"/>
 
@@ -243,6 +252,8 @@
     </div>
   </div>
 </div>
+
+
 
 <div id="toasts"></div>
 <script src="/js/ws-client.js"></script>

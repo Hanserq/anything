@@ -197,6 +197,7 @@ $('btn-submit-create').onclick = async () => {
         questions: draftQs,
         randomize_questions: false,
         randomize_options: false,
+        pacing_mode: $('m-pacing').value
       }),
     });
     const data = await r.json();
@@ -235,6 +236,13 @@ function applySession(s) {
   $('stat-answered').textContent = '—';
   setChip(s.status);
   setButtons(s.status);
+  
+  if (s.status === 'waiting') {
+    renderWaitingQuestions(s.questions || []);
+  } else {
+    $('waiting-questions-list').style.display = 'none';
+  }
+  
   renderLeaderboard(s.leaderboard || []);
   studentsList = s.students || [];
   renderStudentGrid();
@@ -248,11 +256,11 @@ function setChip(status) {
 
 function setButtons(status) {
   // All hidden first
-  ['btn-start','btn-next','btn-pause','btn-resume','btn-export','btn-end'].forEach(id => $(id).style.display = 'none');
+  ['btn-start','btn-pause','btn-resume','btn-export','btn-end'].forEach(id => $(id).style.display = 'none');
   if (status === 'waiting') {
-    show('btn-start'); show('btn-next');
+    show('btn-start');
   } else if (status === 'active') {
-    show('btn-next'); show('btn-pause'); show('btn-end');
+    show('btn-pause'); show('btn-end');
   } else if (status === 'paused') {
     show('btn-resume'); show('btn-end');
   } else if (status === 'ended') {
@@ -265,26 +273,36 @@ function setButtons(status) {
 //  CONTROL ACTIONS
 // ════════════════════════════════════════════════════════════════════
 async function action(act) {
-  const btn = { start: 'btn-start', next_question: 'btn-next', end: 'btn-end' }[act];
+  const btn = { start: 'btn-start', end: 'btn-end' }[act];
   if (btn) $(btn).disabled = true;
   try {
     const r = await fetch(`${API}/api/admin/sessions/${session.id}/${act}?token=${token}`, { method: 'POST' });
     const d = await r.json();
     if (!r.ok) { toast(d.detail || `${act} failed`, 'err'); return; }
     if (d.status) { session.status = d.status; setChip(d.status); setButtons(d.status); }
-    const labels = { start: '▶ Exam started', pause: '⏸ Paused', resume: '▶ Resumed',
-      next_question: '→ Question pushed', end_question: '✓ Question ended', end: '■ Exam ended' };
+    const labels = { start: '▶ Exam started', pause: '⏸ Paused', resume: '▶ Resumed', end: '■ Exam ended' };
     toast(labels[act] || 'Done', 'ok');
   } catch { toast('Request failed', 'err'); }
   finally { if (btn) $(btn).disabled = false; }
 }
 
 $('btn-start').onclick  = () => action('start');
-$('btn-next').onclick   = () => action('next_question');
 $('btn-pause').onclick  = () => action('pause');
 $('btn-resume').onclick = () => action('resume');
 $('btn-end').onclick    = () => { if (confirm('End the exam for all students?')) action('end'); };
 $('btn-export').onclick = () => window.open(`${API}/api/admin/sessions/${session.id}/export?token=${token}`);
+
+$('btn-delete-session').onclick = async () => {
+  if (!confirm('Are you sure you want to permanently delete this session?')) return;
+  try {
+    const r = await fetch(`${API}/api/admin/sessions/${session.id}?token=${token}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error();
+    toast('Session deleted', 'ok');
+    $('btn-back').click();
+  } catch {
+    toast('Failed to delete session', 'err');
+  }
+};
 
 // Add live question
 $('btn-add-live-q').onclick = async () => {
@@ -303,6 +321,10 @@ $('btn-add-live-q').onclick = async () => {
     if (!r.ok) { toast('Failed to add question', 'err'); return; }
     [$('lq-text'), $('lq-a'), $('lq-b'), $('lq-c'), $('lq-d')].forEach(el => el.value = '');
     $('stat-qs').textContent = parseInt($('stat-qs').textContent) + 1;
+    if(session && session.questions) {
+      session.questions.push({ text, options: opts, correct_index: correct });
+      if(session.status === 'waiting') renderWaitingQuestions(session.questions);
+    }
     toast('Question added to session', 'ok');
   } catch { toast('Network error', 'err'); }
 };
@@ -388,6 +410,7 @@ function handleWS(msg) {
   }
 
   if (type === 'session_start') {
+    $('waiting-questions-list').style.display = 'none';
     setChip('active'); setButtons('active'); if (session) session.status = 'active';
   }
   if (type === 'pause') {
@@ -481,22 +504,48 @@ $('btn-submit-unlock').onclick = async () => {
 // ════════════════════════════════════════════════════════════════════
 const medals = ['🥇', '🥈', '🥉'];
 
+function formatTime(sec) {
+  if (!sec) return '';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s < 10 ? '0' : ''}${s}`;
+}
+
 function renderLeaderboard(entries) {
   const el = $('lb-list');
-  if (!entries.length) { el.innerHTML = '<div style="color:var(--text3);font-size:14px">Rankings appear after exam begins…</div>'; return; }
+  if (!entries.length) { el.innerHTML = '<div style="color:var(--text3);font-size:14px;text-align:center;padding:20px 0">Rankings appear after exam begins…</div>'; return; }
   el.innerHTML = '';
-  entries.slice(0, 20).forEach(e => {
+  entries.forEach(e => {
     const row = document.createElement('div');
-    row.className = 'lb-entry';
+    row.style = 'display:flex; align-items:center; background:var(--surface2); padding:16px 20px; border-radius:12px; border:1px solid var(--border); margin-bottom:8px';
     const medal = medals[e.rank - 1] || null;
     row.innerHTML = `
-      <div class="lb-rank ${e.rank <= 3 ? 'top' : ''}">${medal || '#' + e.rank}</div>
-      <div class="lb-info">
-        <div class="lb-name">${e.name}</div>
-        <div class="lb-roll">${e.roll_number}</div>
+      <div style="font-size:24px; font-weight:900; width:48px; color:${e.rank <= 3 ? 'var(--accent)' : 'var(--text3)'}">${medal || '#' + e.rank}</div>
+      <div style="flex:1; min-width:0">
+        <div style="font-size:16px; font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">${e.name}</div>
+        <div style="font-size:12px; color:var(--text3)">${e.roll_number}</div>
       </div>
-      <div class="lb-score">${(e.score || 0).toFixed(1)}</div>`;
+      <div style="font-size:20px; font-weight:900; color:var(--accent); margin-right:16px">${(e.score || 0).toFixed(1)}</div>
+      <div style="font-size:14px; font-weight:700; color:var(--text3); font-family:monospace">${formatTime(e.time_taken)}</div>
+    `;
     el.appendChild(row);
+  });
+}
+
+function renderWaitingQuestions(qs) {
+  const el = $('waiting-questions-list');
+  el.style.display = 'block';
+  if (!qs.length) { el.innerHTML = 'No questions added yet.'; return; }
+  el.innerHTML = '';
+  qs.forEach((q, i) => {
+    const d = document.createElement('div');
+    d.style.marginBottom = '12px';
+    let optsHtml = q.options.map((opt, j) => {
+      let isCorrect = (j === q.correct_index);
+      return `<span style="padding:2px 6px; border-radius:4px; margin-right:6px; background:${isCorrect?'rgba(16,185,129,.15)':'var(--s)'}; color:${isCorrect?'var(--green)':'var(--text3)'}; border:1px solid ${isCorrect?'var(--green)':'var(--border)'}">${['A','B','C','D'][j]}. ${opt}</span>`;
+    }).join('');
+    d.innerHTML = `<strong style="color:var(--text);font-size:14px">Q${i+1}: ${q.text}</strong><div style="margin-top:6px">${optsHtml}</div>`;
+    el.appendChild(d);
   });
 }
 

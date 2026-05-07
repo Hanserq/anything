@@ -207,10 +207,10 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
 .results-card h1 { font-size: 40px; font-weight: 900; letter-spacing: -2px; margin-bottom: 8px; }
 .results-card > p { color: var(--text2); margin-bottom: 40px; font-size: 16px; }
 .results-stats {
-  display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; margin-bottom: 40px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 16px; margin-bottom: 40px;
 }
-.res-stat { background: var(--s2); border-radius: 16px; padding: 24px; text-align: center; }
-.res-stat .val { font-size: 36px; font-weight: 900; color: var(--accent); letter-spacing: -1px; }
+.res-stat { background: var(--s2); border-radius: 16px; padding: 20px; text-align: center; }
+.res-stat .val { font-size: 32px; font-weight: 900; color: var(--accent); letter-spacing: -1px; }
 .res-stat .lbl { font-size: 11px; color: var(--text3); font-weight: 700;
   text-transform: uppercase; letter-spacing: 1px; margin-top: 6px; }
 .res-lb-row {
@@ -223,6 +223,7 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
 .res-lb-rank { font-weight: 900; width: 36px; }
 .res-lb-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .res-lb-score { font-weight: 800; color: var(--accent); font-size: 16px; }
+.res-lb-time { font-size: 11px; color: var(--text3); font-family: monospace; width: 45px; text-align: right; }
 
 /* ── Toast ───────────────────────────────────────────────────────── */
 #toasts {

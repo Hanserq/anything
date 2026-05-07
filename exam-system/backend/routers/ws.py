@@ -116,7 +116,7 @@ async def student_ws(session_id: str, ws: WebSocket,
 
     # Send current state on connect
     state = session_manager.get_session(session_id)
-    current_q = session_manager.current_question(session_id) if state else None
+    current_q = session_manager.get_student_question(session_id, student_id)
     reconnect_data: dict = {
         "type": "connected",
         "data": {
@@ -129,7 +129,7 @@ async def student_ws(session_id: str, ws: WebSocket,
         }
     }
     if current_q and state and state["status"] == "active":
-        elapsed = time.time() - current_q.start_time
+        elapsed = time.time() - getattr(current_q, "start_time", time.time())
         reconnect_data["data"]["current_question"] = {
             "question_id": current_q.question_id,
             "index": current_q.index,
@@ -212,6 +212,7 @@ async def _handle_submit(session_id: str, student_id: str, data: dict,
             "question_id": question_id,
             "is_correct": result["is_correct"],
             "score_awarded": result["score_awarded"],
+            "correct_index": result["correct_shuffled"],
         }
     })
 
@@ -233,6 +234,35 @@ async def _handle_submit(session_id: str, student_id: str, data: dict,
                 "score": answering_student.score if answering_student else 0,
             }
         })
+
+    # Auto pacing
+    if answering_student:
+        import asyncio
+        async def push_next():
+            await asyncio.sleep(0.6)
+            nxt_q = session_manager.get_student_question(session_id, student_id)
+            if nxt_q:
+                # We do not broadcast to all, just this student
+                await ws_manager.send_to_student(session_id, student_id, {
+                    "type": "question_push",
+                    "data": {
+                        "question_id": nxt_q.question_id,
+                        "index": nxt_q.index,
+                        "total": len(state["questions"]),
+                        "text": nxt_q.text,
+                        "options": nxt_q.options,
+                        "time_limit": nxt_q.time_limit,
+                        "start_time": time.time(),
+                        "question_type": nxt_q.question_type,
+                        "pacing_mode": "auto",
+                    }
+                })
+            else:
+                await ws_manager.send_to_student(session_id, student_id, {
+                    "type": "exam_end",
+                    "data": {"message": "You have completed all questions!"}
+                })
+        asyncio.create_task(push_next())
 
 
 async def _handle_violation(session_id: str, student_id: str, data: dict,

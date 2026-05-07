@@ -22,6 +22,7 @@ class SessionCreate(BaseModel):
     randomize_questions: bool = True
     randomize_options: bool = True
     max_strikes: int = 3
+    pacing_mode: str = "auto"
     questions: List[QuestionCreate] = []
 
 
@@ -32,6 +33,7 @@ class SessionInfo(BaseModel):
     status: str
     per_question_time: int
     time_limit: int
+    pacing_mode: str = "auto"
     created_at: datetime
     student_count: int = 0
     question_count: int = 0

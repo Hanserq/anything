@@ -10,6 +10,10 @@ from database import init_db
 from buffer import submission_buffer
 from routers import admin, ws as ws_router
 
+import socket
+from zeroconf import IPVersion, ServiceInfo
+from zeroconf.asyncio import AsyncZeroconf
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -24,9 +28,43 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Starting submission buffer...")
     await submission_buffer.start()
+
+    # Zeroconf mDNS Registration
+    try:
+        def get_ip():
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect(('8.8.8.8', 1))
+                return s.getsockname()[0]
+            except:
+                return '127.0.0.1'
+            finally:
+                s.close()
+
+        local_ip = get_ip()
+        info = ServiceInfo(
+            "_http._tcp.local.",
+            "ExamLAN._http._tcp.local.",
+            addresses=[socket.inet_aton(local_ip)],
+            port=8000,
+            properties={"path": "/"},
+            server="examlan.local.",
+        )
+        aiozc = AsyncZeroconf(ip_version=IPVersion.V4Only)
+        await aiozc.async_register_service(info)
+        logger.info(f"📢 Network: Access via http://examlan.local:8000 (IP: {local_ip})")
+        app.state.aiozc = aiozc
+        app.state.zc_info = info
+    except Exception as e:
+        logger.exception("Failed to register mDNS")
+
     logger.info("🚀 Exam server ready")
     yield
     # Shutdown
+    if hasattr(app.state, "aiozc"):
+        logger.info("Unregistering mDNS...")
+        await app.state.aiozc.async_unregister_service(app.state.zc_info)
+        await app.state.aiozc.close()
     logger.info("Flushing remaining submissions...")
     await submission_buffer.stop()
     logger.info("Server shutdown complete")
