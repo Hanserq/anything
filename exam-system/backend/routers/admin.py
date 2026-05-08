@@ -10,7 +10,7 @@ import string
 from datetime import datetime
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
@@ -249,6 +249,51 @@ async def delete_session(session_id: str, token: str = Query(...),
     
     session_manager.remove_session(session_id)
     return {"status": "deleted"}
+
+
+@router.post("/sessions/{session_id}/clone")
+async def clone_session(session_id: str, token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    await verify_admin(token, db)
+    sess = await db.get(Session, session_id)
+    if not sess: raise HTTPException(404, "Session not found")
+    
+    new_sess = Session(
+        title=f"Copy of {sess.title}", session_code=_gen_code(),
+        description=sess.description, admin_token=ADMIN_TOKEN,
+        per_question_time=sess.per_question_time, time_limit=sess.time_limit,
+        randomize_questions=sess.randomize_questions, randomize_options=sess.randomize_options,
+        max_strikes=sess.max_strikes, pacing_mode=sess.pacing_mode,
+        class_name=sess.class_name, category=sess.category, folder_id=sess.folder_id,
+    )
+    db.add(new_sess)
+    await db.flush()
+    
+    q_r = await db.execute(select(Question).where(Question.session_id == session_id))
+    for q in q_r.scalars().all():
+        db.add(Question(session_id=new_sess.id, index=q.index, text=q.text,
+                        options=q.options, correct_index=q.correct_index,
+                        points=q.points, time_limit=q.time_limit, question_type=q.question_type))
+    await db.commit()
+    return {"session_id": new_sess.id, "session_code": new_sess.session_code, "title": new_sess.title}
+
+
+@router.post("/sessions/{session_id}/whitelist")
+async def upload_whitelist(session_id: str, token: str = Query(...), file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    await verify_admin(token, db)
+    sess = await db.get(Session, session_id)
+    if not sess: raise HTTPException(404, "Session not found")
+    
+    content = await file.read()
+    decoded = content.decode("utf-8").splitlines()
+    reader = csv.reader(decoded)
+    whitelist = []
+    for row in reader:
+        if row and row[0].strip() and row[0].strip().lower() != "roll_number":
+            whitelist.append(row[0].strip())
+    
+    sess.allowed_roll_numbers = whitelist
+    await db.commit()
+    return {"added_count": len(whitelist), "whitelist": whitelist}
 
 
 @router.post("/sessions/{session_id}/questions")
@@ -595,6 +640,43 @@ async def get_violations(session_id: str, token: str = Query(...),
             "occurred_at": v.occurred_at.isoformat(),
         })
     return out
+
+
+@router.get("/sessions/{session_id}/analytics")
+async def get_analytics(session_id: str, token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    await verify_admin(token, db)
+    
+    from models import Submission
+    q_r = await db.execute(select(Question).where(Question.session_id == session_id).order_by(Question.index))
+    questions = q_r.scalars().all()
+    
+    s_r = await db.execute(select(Submission).where(Submission.session_id == session_id))
+    submissions = s_r.scalars().all()
+    
+    analytics = []
+    for q in questions:
+        q_subs = [s for s in submissions if s.question_id == q.id]
+        total_attempts = len(q_subs)
+        correct_count = sum(1 for s in q_subs if s.is_correct)
+        avg_time = sum(s.time_taken for s in q_subs) / total_attempts if total_attempts > 0 else 0
+        
+        option_distribution = {i: 0 for i in range(len(q.options))}
+        for s in q_subs:
+            if s.actual_option is not None and s.actual_option >= 0:
+                option_distribution[s.actual_option] = option_distribution.get(s.actual_option, 0) + 1
+                
+        analytics.append({
+            "question_id": q.id,
+            "index": q.index,
+            "text": q.text,
+            "total_attempts": total_attempts,
+            "correct_percentage": (correct_count / total_attempts * 100) if total_attempts > 0 else 0,
+            "average_time": round(avg_time, 2),
+            "option_distribution": option_distribution
+        })
+        
+    return analytics
+
 
 
 @router.post("/sessions/{session_id}/unlock_student")

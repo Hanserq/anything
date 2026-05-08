@@ -199,6 +199,10 @@ function handleMsg(msg) {
       toast('▶ Exam resumed', 'ok');
       break;
 
+    case 'admin_announcement':
+      toast('📢 ' + (data.message || 'Announcement'), 'info');
+      break;
+
     case 'exam_end':
       clearTimer(); clearSkipTimer();
       showResults((data || msg.data)?.leaderboard || []);
@@ -285,6 +289,7 @@ function handleAck({ is_correct, score_awarded, question_id, correct_index }) {
 
   // Show inline feedback bar
   showFeedback(is_correct, score_awarded, correct_index);
+  playChime(is_correct);
 
   // The server will send a 'question_push' in ~0.6s automatically.
   // We show a brief "loading next…" indicator after 1.5s if push hasn't arrived.
@@ -313,6 +318,40 @@ function showFeedback(isCorrect, score, correctIdx) {
 function hideFeedback() {
   const el = $('q-feedback');
   if (el) el.style.display = 'none';
+}
+
+// ── Audio ─────────────────────────────────────────────────────────────────────
+let audioCtx = null;
+function playChime(isCorrect) {
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { return; }
+  }
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  
+  const now = audioCtx.currentTime;
+  if (isCorrect) {
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(523.25, now); // C5
+    osc.frequency.setValueAtTime(659.25, now + 0.1); // E5
+    gain.gain.setValueAtTime(0.1, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    osc.start(now);
+    osc.stop(now + 0.5);
+  } else {
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(200, now);
+    osc.frequency.setValueAtTime(150, now + 0.15);
+    gain.gain.setValueAtTime(0.1, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+    osc.start(now);
+    osc.stop(now + 0.4);
+  }
 }
 
 // ── Reveal correct option ─────────────────────────────────────────────────────
