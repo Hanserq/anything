@@ -2,13 +2,16 @@ import os
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 from database import init_db
 from buffer import submission_buffer
 from routers import admin, ws as ws_router
+from limiter import limiter
 
 import socket
 from zeroconf import IPVersion, ServiceInfo
@@ -21,6 +24,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def get_ip():
+    try:
+        ips = socket.gethostbyname_ex(socket.gethostname())[2]
+        lan_ips = [ip for ip in ips if not ip.startswith("127.")]
+        if lan_ips:
+            return lan_ips[0]
+    except:
+        pass
+
+    for test_ip in ['10.255.255.255', '192.168.255.255', '172.31.255.255', '8.8.8.8']:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((test_ip, 1))
+            ip = s.getsockname()[0]
+            if not ip.startswith("127."):
+                return ip
+        except:
+            pass
+        finally:
+            s.close()
+    return '127.0.0.1'
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -31,30 +56,6 @@ async def lifespan(app: FastAPI):
 
     # Zeroconf mDNS Registration
     try:
-        def get_ip():
-            try:
-                # Try getting all IPs resolved by hostname
-                ips = socket.gethostbyname_ex(socket.gethostname())[2]
-                lan_ips = [ip for ip in ips if not ip.startswith("127.")]
-                if lan_ips:
-                    return lan_ips[0]
-            except:
-                pass
-
-            # Fallback to UDP connect trick (using link-local or common private IPs)
-            for test_ip in ['10.255.255.255', '192.168.255.255', '172.31.255.255', '8.8.8.8']:
-                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                try:
-                    s.connect((test_ip, 1))
-                    ip = s.getsockname()[0]
-                    if not ip.startswith("127."):
-                        return ip
-                except:
-                    pass
-                finally:
-                    s.close()
-            return '127.0.0.1'
-
         local_ip = get_ip()
         info = ServiceInfo(
             "_http._tcp.local.",
@@ -91,9 +92,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[f"http://{get_ip()}:8000", "http://examlan.local:8000", "http://localhost:8000", "http://127.0.0.1:8000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

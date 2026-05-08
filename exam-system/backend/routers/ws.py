@@ -2,7 +2,7 @@ import time
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, or_
 
@@ -12,6 +12,7 @@ from schemas import StudentJoin
 from session_manager import session_manager
 from ws_manager import ws_manager
 from buffer import submission_buffer
+from limiter import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["student"])
@@ -46,7 +47,8 @@ def schedule_student_timer(session_id: str, student_id: str, question_id: str, t
 # ── Student join (REST) ───────────────────────────────────────────────────────
 
 @router.post("/api/student/join")
-async def student_join(body: StudentJoin, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def student_join(request: Request, body: StudentJoin, db: AsyncSession = Depends(get_db)):
     # Look up session by code (case-insensitive) OR by UUID
     code_upper = body.session_id.strip().upper()
     result = await db.execute(
@@ -60,6 +62,11 @@ async def student_join(body: StudentJoin, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "Session not found — check your join code")
     if sess.status == "ended":
         raise HTTPException(400, "This session has already ended")
+
+    # Check whitelist
+    if sess.allowed_roll_numbers is not None and len(sess.allowed_roll_numbers) > 0:
+        if body.roll_number not in sess.allowed_roll_numbers:
+            raise HTTPException(403, "Your roll number is not authorized for this exam.")
 
     # Check duplicate roll number
     existing = await db.execute(
@@ -379,6 +386,13 @@ async def admin_ws(session_id: str, ws: WebSocket):
                         "type": "leaderboard_update",
                         "version": state["leaderboard_version"],
                         "data": board,
+                    })
+            elif msg.get("type") == "admin_broadcast":
+                text = msg.get("data", {}).get("message", "")
+                if text:
+                    await ws_manager.broadcast_students(session_id, {
+                        "type": "admin_announcement",
+                        "data": {"message": text}
                     })
     except WebSocketDisconnect:
         ws_manager.disconnect_admin(session_id, ws)

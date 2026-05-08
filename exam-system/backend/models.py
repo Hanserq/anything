@@ -41,6 +41,7 @@ class Session(Base):
     started_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)
     checkpoint_data = Column(Text, nullable=True)   # JSON blob
+    allowed_roll_numbers = Column(JSON, nullable=True) # list of allowed roll numbers
 
     students = relationship("Student", back_populates="session", cascade="all, delete")
     questions = relationship("Question", back_populates="session", cascade="all, delete")

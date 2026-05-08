@@ -171,11 +171,19 @@ class SessionManager:
             ratio = max(0, 1 - validated_time_taken / q.time_limit)
             speed_bonus = round(ratio * 3, 2)
 
-        score_awarded = (q.points + speed_bonus) if is_correct else 0.0
+        if validated_time_taken < 1.5:
+            logger.warning(f"Speed Anomaly: Student {student_id} answered in {validated_time_taken:.2f}s")
+            # Can also trigger self.record_violation(session_id, student_id) here if desired.
+
+        if is_correct:
+            score_awarded = q.points + speed_bonus
+        else:
+            # Negative Marking: -0.33 per wrong answer
+            score_awarded = -0.33
 
         student.answered_ids.add(question_id)
+        student.score += score_awarded
         if is_correct:
-            student.score += score_awarded
             student.correct_count += 1
 
         # Always advance the index — get_student_question returns None when past the end
