@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
 <title>ExamLAN — Admin</title>
 <link rel="stylesheet" href="/css/admin.css"/>
+<link rel="stylesheet" href="/css/modal-shared.css"/>
 </head>
 <body>
 
@@ -30,14 +31,47 @@
     <button class="btn-ghost" id="btn-reset" style="opacity:.4;font-size:11px">Reset</button>
   </header>
 
-  <!-- ── Sessions List ─────────────────────────────────────────────── -->
-  <div id="screen-sessions">
-    <div class="sessions-header">
-      <h1>Sessions</h1>
-      <button class="btn-accent" id="btn-new-session">+ New Exam</button>
+  <!-- ── Sessions File Manager ─────────────────────────────────────── -->
+  <div id="screen-sessions" style="display: flex; flex-direction: column; flex: 1;">
+    <div class="sessions-header" style="display:flex; align-items:center; justify-content:space-between; margin-bottom:24px;">
+      <h1 id="file-manager-title" style="margin:0;">Exams</h1>
+      
+      <div style="display:flex; align-items:center; gap:16px;">
+        <div class="filter-search-wrap" style="width:340px; background:var(--surface); border:1px solid var(--border); border-radius:12px;">
+          <span class="filter-icon">🔍</span>
+          <input id="global-search" type="text" placeholder="Search exams or students..." autocomplete="off" style="font-size:15px;"/>
+          <button id="global-search-clear" style="display:none; background:none; border:none; color:var(--text3); cursor:pointer;">✕</button>
+        </div>
+        <button class="btn-accent" id="btn-new-session" style="padding:12px 24px;">+ New Exam</button>
+      </div>
     </div>
-    <div class="sessions-grid" id="session-list">
-      <div class="empty-state">No sessions yet. Create your first exam →</div>
+    
+    <div id="fm-container">
+        <!-- Breadcrumb -->
+        <div id="breadcrumb" style="display:flex; align-items:center; gap:8px; font-size:15px; font-weight:700; color:var(--text3); margin-bottom:24px;">
+           <!-- Breadcrumbs generated here -->
+        </div>
+
+        <div style="margin-bottom: 24px; display:flex; gap:12px;">
+            <button class="btn-ghost" id="btn-new-folder" style="font-size:13px; padding:8px 16px; border:1px solid var(--border); border-radius:10px;">📁 New Folder</button>
+        </div>
+
+        <!-- File Manager Grid -->
+        <div class="sessions-grid" id="file-manager-grid">
+          <div class="empty-state">Loading...</div>
+        </div>
+    </div>
+    
+    <!-- Global Search Results Container -->
+    <div id="global-search-results" style="display:none; flex-direction:column; gap:32px;">
+       <div>
+           <h3 style="margin-bottom:16px; color:var(--text3); font-size:13px; text-transform:uppercase; letter-spacing:1px; font-weight:800;">Exam Sessions</h3>
+           <div id="gs-sessions" class="sessions-grid"></div>
+       </div>
+       <div>
+           <h3 style="margin-bottom:16px; color:var(--text3); font-size:13px; text-transform:uppercase; letter-spacing:1px; font-weight:800;">Students</h3>
+           <div id="gs-students" style="display:flex; flex-direction:column; gap:16px;"></div>
+       </div>
     </div>
   </div>
 
@@ -256,6 +290,19 @@
 
 
 <div id="toasts"></div>
+
+<!-- Custom Confirm Modal -->
+<div id="confirm-modal" class="modal-overlay">
+  <div class="modal-card">
+    <h3 id="confirm-title">Confirm Action</h3>
+    <p id="confirm-msg">Are you sure you want to proceed?</p>
+    <div class="modal-btns">
+      <button id="confirm-cancel" class="modal-btn cancel">Cancel</button>
+      <button id="confirm-ok" class="modal-btn confirm">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <script src="/js/ws-client.js"></script>
 <script src="/js/admin.js"></script>
 </body>

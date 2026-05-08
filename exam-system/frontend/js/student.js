@@ -1,17 +1,44 @@
-// ExamLAN Student Portal — Fixed & matching admin design
+// ExamLAN Student Portal — Auto-pacing fixed
 'use strict';
 
 const API     = window.location.origin;
 const WS_BASE = `ws://${window.location.host}`;
 
-let studentId  = null;
-let sessionId  = null;
-let ws         = null;
-let timerLoop  = null;
-let currentQ   = null;
-let overlay    = null;   // wait-for-next DOM element
+let studentId    = null;
+let sessionId    = null;
+let ws           = null;
+let timerLoop    = null;
+let currentQ     = null;
+let skipTimer    = null;   // timeout to show the manual skip button
 
 const $ = id => document.getElementById(id);
+
+// ── Custom Confirm Modal Helper ──────────────────────────────────────────────
+window.confirmAsync = function(title, msg, isDanger = false) {
+  return new Promise((resolve) => {
+    const modal = $('confirm-modal');
+    const t = $('confirm-title');
+    const m = $('confirm-msg');
+    const ok = $('confirm-ok');
+    const cancel = $('confirm-cancel');
+    if (!modal || !ok || !cancel) { console.error('Modal elements missing'); return resolve(false); }
+
+    t.textContent = title;
+    m.textContent = msg;
+    ok.className = isDanger ? 'modal-btn confirm danger' : 'modal-btn confirm';
+    modal.style.display = 'flex';
+
+    const cleanup = (val) => {
+      modal.style.display = 'none';
+      ok.onclick = null; cancel.onclick = null; modal.onclick = null;
+      resolve(val);
+    };
+
+    ok.onclick = () => cleanup(true);
+    cancel.onclick = () => cleanup(false);
+    modal.onclick = (e) => { if (e.target === modal) cleanup(false); };
+  });
+};
 
 // ── Screen management ─────────────────────────────────────────────────────────
 function show(id) {
@@ -31,6 +58,28 @@ $('btn-join').onclick = doJoin;
 ['inp-name', 'inp-roll', 'inp-code'].forEach(id =>
   $(id).addEventListener('keydown', e => { if (e.key === 'Enter') doJoin(); })
 );
+
+// ── Leave session (waiting screen) ────────────────────────────────────────────
+$('btn-leave').onclick = async () => {
+  if (!(await confirmAsync('Leave Session', 'Are you sure you want to leave? You will need to re-enter the join code.', true))) return;
+  if (ws) { ws.close(); ws = null; }
+  studentId = null; sessionId = null;
+  localStorage.removeItem('exam_sid');
+  localStorage.removeItem('exam_sess');
+  localStorage.removeItem('exam_name');
+  // Reset join form
+  ['inp-name','inp-roll','inp-code'].forEach(id => $(id).value = '');
+  show('screen-join');
+  toast('You have left the session.', 'info');
+};
+
+const forceReset = async () => {
+  if (!(await confirmAsync('Reset State', 'This will completely reset your browser state and clear any saved session. Continue?', true))) return;
+  localStorage.clear();
+  window.location.reload();
+};
+$('btn-reset-join').onclick = forceReset;
+$('btn-reset-wait').onclick = forceReset;
 
 async function doJoin() {
   const name = $('inp-name').value.trim();
@@ -52,7 +101,7 @@ async function doJoin() {
     if (!r.ok) { toast(d.detail || 'Join failed — check the code', 'err'); return; }
 
     studentId = d.student_id;
-    sessionId = d.session_id;   // server returns resolved UUID
+    sessionId = d.session_id;
     localStorage.setItem('exam_sid', studentId);
     localStorage.setItem('exam_sess', sessionId);
     localStorage.setItem('exam_name', d.name);
@@ -82,7 +131,6 @@ function connectWS() {
 
 async function handleOpen() {
   setConn(true);
-  // Sync cached offline answers
   try {
     await ExamDB.open();
     const pending = await ExamDB.getPendingAnswers();
@@ -93,60 +141,77 @@ async function handleOpen() {
   } catch {}
 }
 
+// ── Message handler ───────────────────────────────────────────────────────────
 function handleMsg(msg) {
   const { type, data } = msg;
   switch (type) {
     case 'connected':
+      // Reconnect — if already on a question, resume it
       if (data.session_status === 'active' && data.current_question) {
         renderQuestion(data.current_question, data.current_question.elapsed || 0);
       } else {
         show('screen-waiting');
       }
       break;
+
     case 'session_start':
-      removeOverlay();
-      show('screen-waiting');
+      // Server will immediately push Q1 via question_push — just show brief toast
       toast('Exam starting!', 'ok');
       break;
+
     case 'question_push':
-      removeOverlay();
+      // A new question for THIS student individually
+      clearSkipTimer();
+      hideFeedback();
       renderQuestion(data, 0);
       break;
+
     case 'answer_ack':
+      // Server confirmed our answer — show feedback, then await question_push
       handleAck(data);
       break;
+
     case 'question_end':
-      // Time expired — reveal correct before overlay
+      // Global timer expired for the admin-paced question (shouldn't fire in auto mode)
+      // We just reveal correct and wait for the server to push next
       clearTimer();
-      revealCorrect(data.correct_index);
-      setTimeout(() => showWaitOverlay(false, 0), 1500);
+      if (currentQ && data.correct_index !== undefined) {
+        revealCorrect(data.correct_index);
+      }
       break;
+
     case 'exam_locked':
-      clearTimer(); removeOverlay();
+      clearTimer(); clearSkipTimer();
       $('lock-msg').textContent = data.message || 'Your exam has been locked.';
       show('screen-locked');
       break;
+
     case 'exam_unlocked':
       toast('Your exam has been unlocked by the admin.', 'ok');
       show('screen-waiting');
       break;
+
     case 'pause':
       toast('⏸ Exam paused by teacher', 'info');
       break;
+
     case 'resume':
       toast('▶ Exam resumed', 'ok');
       break;
+
     case 'exam_end':
-      clearTimer(); removeOverlay();
+      clearTimer(); clearSkipTimer();
       showResults((data || msg.data)?.leaderboard || []);
       break;
   }
 }
 
-// ── Question rendering ─────────────────────────────────────────────────────────
+// ── Question rendering ────────────────────────────────────────────────────────
 function renderQuestion(q, elapsed) {
   currentQ = q;
   show('screen-question');
+  hideFeedback();
+  $('q-skip-row').style.display = 'none';
   $('q-badge').textContent = `Q ${q.index + 1} / ${q.total}`;
   $('q-text').textContent = q.text;
 
@@ -175,11 +240,14 @@ function renderQuestion(q, elapsed) {
   }
 }
 
+// ── Option selection ──────────────────────────────────────────────────────────
 function pickOption(idx, btn) {
   if (document.querySelector('.opt-btn.selected')) return; // already picked
-  // Lock all options
+
+  // Lock all options immediately so student can't double-click
   document.querySelectorAll('.opt-btn').forEach(b => { b.disabled = true; });
   btn.classList.add('selected');
+  clearTimer();
 
   const timeTaken = (currentQ.time_limit > 0 && currentQ.start_time)
     ? Math.min(currentQ.time_limit, Date.now() / 1000 - currentQ.start_time)
@@ -192,36 +260,64 @@ function pickOption(idx, btn) {
 
   if (ws?.isConnected) {
     ws.send(payload);
+    // Start a skip timer — if server doesn't respond in 4s show manual skip
+    startSkipTimer();
   } else {
-    // Cache offline
     ExamDB.queueAnswer(payload.data).catch(() => {});
     toast('Saved offline — will sync on reconnect', 'info');
-    // Show overlay anyway after 2s
-    setTimeout(() => showWaitOverlay(false, 0), 2000);
+    showFeedback(false, 0, null);
   }
 }
 
+// ── Answer acknowledgement ────────────────────────────────────────────────────
 function handleAck({ is_correct, score_awarded, question_id, correct_index }) {
+  // Guard: ignore acks for a question we've already moved past
   if (!currentQ || currentQ.question_id !== question_id) return;
-  clearTimer();
 
-  // Mark the selected option correct/wrong
+  clearSkipTimer(); // server responded, cancel the stuck-detection timer
+
+  // Show correct/wrong styling on selected option
   const sel = document.querySelector('.opt-btn.selected');
   if (sel) sel.classList.add(is_correct ? 'correct' : 'wrong');
 
-  if (!is_correct && correct_index !== undefined) {
-    revealCorrect(correct_index);
-  }
+  // Always reveal the correct answer
+  revealCorrect(correct_index);
 
-  if (currentQ.pacing_mode === 'auto') {
-    // Just show the right answer for a sec, the server will push the next question immediately
+  // Show inline feedback bar
+  showFeedback(is_correct, score_awarded, correct_index);
+
+  // The server will send a 'question_push' in ~0.6s automatically.
+  // We show a brief "loading next…" indicator after 1.5s if push hasn't arrived.
+  startSkipTimer(1500);
+}
+
+// ── Feedback bar (inline, not an overlay) ────────────────────────────────────
+function showFeedback(isCorrect, score, correctIdx) {
+  const el = $('q-feedback');
+  if (!el) return;
+  if (isCorrect) {
+    el.textContent = score > 0 ? `✓ Correct! +${Number(score).toFixed(1)} pts` : '✓ Correct!';
+    el.style.display = 'block';
+    el.style.background = 'rgba(16,185,129,0.15)';
+    el.style.border = '1px solid var(--green)';
+    el.style.color = 'var(--green)';
   } else {
-    // 1.5 seconds later — show the wait overlay with score
-    setTimeout(() => showWaitOverlay(is_correct, score_awarded ?? 0), 1500);
+    el.textContent = '✗ Incorrect';
+    el.style.display = 'block';
+    el.style.background = 'rgba(239,68,68,0.12)';
+    el.style.border = '1px solid var(--red)';
+    el.style.color = 'var(--red)';
   }
 }
 
+function hideFeedback() {
+  const el = $('q-feedback');
+  if (el) el.style.display = 'none';
+}
+
+// ── Reveal correct option ─────────────────────────────────────────────────────
 function revealCorrect(correctIdx) {
+  if (correctIdx === undefined || correctIdx === null) return;
   document.querySelectorAll('.opt-btn').forEach((b, i) => {
     b.disabled = true;
     if (i === correctIdx && !b.classList.contains('correct')) {
@@ -230,36 +326,33 @@ function revealCorrect(correctIdx) {
   });
 }
 
-// ── Wait overlay ──────────────────────────────────────────────────────────────
-function showWaitOverlay(isCorrect, score) {
-  removeOverlay();
-  const div = document.createElement('div');
-  div.className = 'wait-overlay';
-  div.id = 'wait-overlay';
+// ── Skip timer — shows manual button if server is slow / stuck ────────────────
+function startSkipTimer(delayMs = 4000) {
+  clearSkipTimer();
+  skipTimer = setTimeout(() => {
+    const skipRow = $('q-skip-row');
+    if (skipRow) skipRow.style.display = 'block';
+  }, delayMs);
+}
 
-  // Score badge — always show something
-  const badge = document.createElement('div');
-  badge.className = `score-badge ${isCorrect ? 'correct' : 'wrong'}`;
-  if (isCorrect) {
-    badge.textContent = score > 0 ? `+${Number(score).toFixed(1)}` : '✓';
+function clearSkipTimer() {
+  if (skipTimer) { clearTimeout(skipTimer); skipTimer = null; }
+  const skipRow = $('q-skip-row');
+  if (skipRow) skipRow.style.display = 'none';
+}
+
+// Manual skip: ask the server for the current state (triggers reconnect logic)
+$('btn-skip').onclick = () => {
+  clearSkipTimer();
+  $('q-skip-row').style.display = 'none';
+  toast('Requesting next question…', 'info');
+  // Re-ping server by sending heartbeat — server will reply with current question on reconnect
+  if (ws?.isConnected) {
+    ws.send({ type: 'heartbeat' });
   } else {
-    badge.textContent = '✗';
+    connectWS();
   }
-  div.appendChild(badge);
-
-  const p = document.createElement('p');
-  p.textContent = '⏳ Waiting for next question…';
-  div.appendChild(p);
-
-  document.body.appendChild(div);
-  overlay = div;
-}
-
-function removeOverlay() {
-  if (overlay) { overlay.remove(); overlay = null; }
-  const old = document.getElementById('wait-overlay');
-  if (old) old.remove();
-}
+};
 
 // ── Timer ─────────────────────────────────────────────────────────────────────
 function startTimer(limit, elapsed, serverStartTime) {
@@ -284,7 +377,17 @@ function startTimer(limit, elapsed, serverStartTime) {
       num.className = 'timer-num';
     }
 
-    if (rem <= 0) clearTimer();
+    if (rem <= 0) {
+      clearTimer();
+      // Timer ran out and no answer was given — show skip button so they can manually advance
+      if (!document.querySelector('.opt-btn.selected')) {
+        document.querySelectorAll('.opt-btn').forEach(b => b.disabled = true);
+        showFeedback(false, 0, null);
+        const fb = $('q-feedback');
+        if (fb) fb.textContent = '⏱ Time\'s up!';
+        startSkipTimer(500);
+      }
+    }
   }
   tick();
   timerLoop = setInterval(tick, 500);
@@ -351,7 +454,6 @@ document.addEventListener('visibilitychange', () => {
 });
 
 window.addEventListener('blur', () => {
-  // We only track blur if it's the active exam screen to prevent false positives
   if (document.getElementById('screen-question').classList.contains('active') && ws?.isConnected) {
     ws.send({
       type: 'violation',

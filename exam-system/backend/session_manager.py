@@ -164,12 +164,13 @@ class SessionManager:
             student.score += score_awarded
             student.correct_count += 1
 
-        # Check if finished
+        # Always advance the index — get_student_question returns None when past the end
+        student.current_index += 1
+
+        # Mark as finished if this was the last question
         if q.index >= len(state["questions"]) - 1:
             student.finished_at = time.time()
             student.status = "submitted"
-        else:
-            student.current_index += 1
 
         return {
             "session_id": session_id,

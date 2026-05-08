@@ -1,35 +1,78 @@
+"""
+ExamLAN WebSocket Manager
+Uses a per-student outgoing queue so that sends and receives
+never happen concurrently on the same WebSocket object.
+"""
 import asyncio
-import json
 import logging
-from typing import Dict, Set
+from typing import Dict, Optional, Set
 from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
+
+_SENTINEL = object()   # marks queue shutdown
+
+
+class StudentConnection:
+    """Wraps one student WebSocket with a dedicated send-queue."""
+
+    def __init__(self, ws: WebSocket):
+        self.ws = ws
+        self._q: asyncio.Queue = asyncio.Queue()
+        self._pump_task: Optional[asyncio.Task] = None
+
+    def start_pump(self):
+        self._pump_task = asyncio.create_task(self._pump())
+
+    async def _pump(self):
+        """Drain the outgoing queue, sending one message at a time."""
+        while True:
+            item = await self._q.get()
+            if item is _SENTINEL:
+                break
+            try:
+                await self.ws.send_json(item)
+            except Exception:
+                break   # connection gone; exit pump
+
+    async def send(self, msg: dict):
+        """Enqueue a message (never awaits the WS directly)."""
+        await self._q.put(msg)
+
+    async def close(self):
+        """Signal the pump to stop."""
+        await self._q.put(_SENTINEL)
+        if self._pump_task:
+            try:
+                await asyncio.wait_for(self._pump_task, timeout=2)
+            except Exception:
+                pass
 
 
 class ConnectionManager:
     """
     Manages all live WebSocket connections.
-    Students connect to /ws/student/{session_id}
-    Admins connect to  /ws/admin/{session_id}
+    Students: each has a StudentConnection with a dedicated send-pump.
+    Admins: low-traffic, direct send is fine.
     """
 
     def __init__(self):
-        # session_id -> {student_id -> WebSocket}
-        self._students: Dict[str, Dict[str, WebSocket]] = {}
-        # session_id -> {WebSocket}
+        self._students: Dict[str, Dict[str, StudentConnection]] = {}
         self._admins: Dict[str, Set[WebSocket]] = {}
 
     # ── Connect / disconnect ──────────────────────────────────────────────────
 
     async def connect_student(self, session_id: str, student_id: str, ws: WebSocket):
         await ws.accept()
-        self._students.setdefault(session_id, {})[student_id] = ws
+        conn = StudentConnection(ws)
+        conn.start_pump()
+        self._students.setdefault(session_id, {})[student_id] = conn
         logger.info(f"Student {student_id} connected to session {session_id}")
 
-    def disconnect_student(self, session_id: str, student_id: str):
-        sess = self._students.get(session_id, {})
-        sess.pop(student_id, None)
+    async def disconnect_student(self, session_id: str, student_id: str):
+        conn = self._students.get(session_id, {}).pop(student_id, None)
+        if conn:
+            await conn.close()
         logger.info(f"Student {student_id} disconnected from session {session_id}")
 
     async def connect_admin(self, session_id: str, ws: WebSocket):
@@ -43,22 +86,13 @@ class ConnectionManager:
     # ── Send helpers ──────────────────────────────────────────────────────────
 
     async def send_to_student(self, session_id: str, student_id: str, msg: dict):
-        ws = self._students.get(session_id, {}).get(student_id)
-        if ws:
-            try:
-                await ws.send_json(msg)
-            except Exception:
-                self.disconnect_student(session_id, student_id)
+        conn = self._students.get(session_id, {}).get(student_id)
+        if conn:
+            await conn.send(msg)   # just enqueues; never blocks on WS
 
     async def broadcast_students(self, session_id: str, msg: dict):
-        dead = []
-        for sid, ws in list(self._students.get(session_id, {}).items()):
-            try:
-                await ws.send_json(msg)
-            except Exception:
-                dead.append(sid)
-        for sid in dead:
-            self.disconnect_student(session_id, sid)
+        conns = list(self._students.get(session_id, {}).values())
+        await asyncio.gather(*[c.send(msg) for c in conns], return_exceptions=True)
 
     async def broadcast_admins(self, session_id: str, msg: dict):
         dead = []

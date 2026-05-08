@@ -1,0 +1,34 @@
+.modal-overlay {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 99999 !important;
+  background: rgba(0,0,0,0.75) !important;
+  backdrop-filter: blur(12px) !important;
+  display: none;
+  align-items: center !important;
+  justify-content: center !important;
+  animation: modal-fade .2s ease !important;
+}
+@keyframes modal-fade { from{opacity:0} to{opacity:1} }
+.modal-card {
+  width: min(420px, 92vw) !important;
+  background: #141414 !important;
+  border: 1px solid #2a2a2a !important;
+  border-radius: 24px !important;
+  padding: 40px !important;
+  text-align: center !important;
+  box-shadow: 0 40px 80px rgba(0,0,0,0.8) !important;
+  animation: modal-slide .35s cubic-bezier(.34,1.56,.64,1) !important;
+  position: relative !important;
+}
+@keyframes modal-slide { from{transform:translateY(40px);opacity:0} to{transform:translateY(0);opacity:1} }
+.modal-card h3 { font-size: 24px !important; font-weight: 900 !important; margin-bottom: 12px !important; color: #fff !important; letter-spacing: -0.5px !important; }
+.modal-card p { color: #888 !important; font-size: 16px !important; line-height: 1.6 !important; margin-bottom: 36px !important; }
+.modal-btns { display: flex !important; gap: 12px !important; }
+.modal-btn {
+  flex: 1 !important; padding: 18px !important; border-radius: 16px !important; font-size: 15px !important; font-weight: 800 !important;
+  cursor: pointer !important; font-family: inherit !important; transition: all .2s !important; border: none !important;
+}
+.modal-btn.cancel { background: #1c1c1c !important; color: #888 !important; border: 1px solid #2a2a2a !important; }
+.modal-btn.confirm { background: #f59e0b !important; color: #000 !important; }
+.modal-btn.confirm.danger { background: #ef4444 !important; color: #fff !important; }

@@ -15,6 +15,33 @@ let selectedStudentToUnlock = null;
 const $  = id  => document.getElementById(id);
 const qs = sel => document.querySelector(sel);
 
+// ── Custom Confirm Modal Helper ──────────────────────────────────────────────
+window.confirmAsync = function(title, msg, isDanger = false) {
+  return new Promise((resolve) => {
+    const modal = $('confirm-modal');
+    const t = $('confirm-title');
+    const m = $('confirm-msg');
+    const ok = $('confirm-ok');
+    const cancel = $('confirm-cancel');
+    if (!modal || !ok || !cancel) { console.error('Modal elements missing'); return resolve(false); }
+
+    t.textContent = title;
+    m.textContent = msg;
+    ok.className = isDanger ? 'modal-btn confirm danger' : 'modal-btn confirm';
+    modal.style.display = 'flex';
+
+    const cleanup = (val) => {
+      modal.style.display = 'none';
+      ok.onclick = null; cancel.onclick = null; modal.onclick = null;
+      resolve(val);
+    };
+
+    ok.onclick = () => cleanup(true);
+    cancel.onclick = () => cleanup(false);
+    modal.onclick = (e) => { if (e.target === modal) cleanup(false); };
+  });
+};
+
 // ════════════════════════════════════════════════════════════════════
 //  BOOT
 // ════════════════════════════════════════════════════════════════════
@@ -41,8 +68,8 @@ async function bootApp() {
   hideEl('screen-token');
   showEl('app', 'flex');
   showScreen('sessions');
-  await loadSessions();
-  pollId = setInterval(loadSessions, 6000);
+  await loadData();
+  pollId = setInterval(loadData, 6000);
   $('ctrl-url').textContent = window.location.host;
 }
 
@@ -50,8 +77,8 @@ async function bootApp() {
 //  NAVIGATION
 // ════════════════════════════════════════════════════════════════════
 function showScreen(name) {
-  $('screen-sessions').style.display = name === 'sessions' ? 'block' : 'none';
-  $('screen-control').style.display  = name === 'control'  ? 'grid'  : 'none';
+  $('screen-sessions').style.display       = name === 'sessions'       ? 'block' : 'none';
+  $('screen-control').style.display        = name === 'control'        ? 'grid'  : 'none';
   $('btn-back').style.display = name === 'control' ? 'block' : 'none';
 }
 
@@ -59,11 +86,11 @@ $('btn-back').onclick = () => {
   if (ws) { ws.close(); ws = null; }
   session = null;
   showScreen('sessions');
-  loadSessions();
+  loadData();
 };
 
 $('btn-reset').onclick = async () => {
-  if (!confirm('Clear all local data and reload?')) return;
+  if (!(await confirmAsync('System Reset', 'Clear all local data and reload? This will log you out.', true))) return;
   if ('serviceWorker' in navigator)
     (await navigator.serviceWorker.getRegistrations()).forEach(r => r.unregister());
   localStorage.clear();
@@ -71,24 +98,93 @@ $('btn-reset').onclick = async () => {
 };
 
 // ════════════════════════════════════════════════════════════════════
-//  SESSIONS LIST
+//  FILE MANAGER & GLOBAL SEARCH
 // ════════════════════════════════════════════════════════════════════
-async function loadSessions() {
+let allSessions = [];
+let allFolders = [];
+let currentFolderId = null;
+
+async function loadData() {
   try {
-    const r = await fetch(`${API}/api/admin/sessions?token=${token}`);
-    if (r.status === 403) { token = ''; localStorage.removeItem('admin_token'); location.reload(); return; }
-    renderSessionList(await r.json());
+    const [rSess, rFold] = await Promise.all([
+      fetch(`${API}/api/admin/sessions?token=${token}`),
+      fetch(`${API}/api/admin/folders?token=${token}`)
+    ]);
+    if (rSess.status === 403) { token = ''; localStorage.removeItem('admin_token'); location.reload(); return; }
+    allSessions = await rSess.json();
+    allFolders = rFold.ok ? await rFold.json() : [];
+    
+    if ($('global-search').value.trim() !== '') {
+        doGlobalSearch();
+    } else {
+        renderFileManager();
+    }
   } catch {}
 }
 
-function renderSessionList(list) {
-  const el = $('session-list');
-  if (!list.length) {
-    el.innerHTML = '<div class="empty-state">No sessions yet. Create your first exam →</div>';
-    return;
+function renderFileManager() {
+  $('fm-container').style.display = 'block';
+  $('global-search-results').style.display = 'none';
+  
+  // Breadcrumbs
+  const bcEl = $('breadcrumb');
+  bcEl.innerHTML = '<span class="bc-link" data-id="root" style="cursor:pointer; color:var(--text); transition:color .2s;">Root</span>';
+  
+  let path = [];
+  let curr = currentFolderId;
+  while(curr) {
+      const f = allFolders.find(x => x.id === curr);
+      if(!f) break;
+      path.unshift(f);
+      curr = f.parent_id;
   }
-  el.innerHTML = '';
-  list.forEach(s => {
+  
+  path.forEach(f => {
+      bcEl.innerHTML += ' <span style="color:var(--text3);">/</span> ';
+      const s = document.createElement('span');
+      s.className = 'bc-link';
+      s.style.cssText = 'cursor:pointer; color:var(--text); transition:color .2s;';
+      s.dataset.id = f.id;
+      s.textContent = f.name;
+      bcEl.appendChild(s);
+  });
+  
+  bcEl.querySelectorAll('.bc-link').forEach(el => {
+      el.onclick = () => {
+          currentFolderId = el.dataset.id === 'root' ? null : el.dataset.id;
+          renderFileManager();
+      };
+      el.onmouseenter = () => el.style.color = 'var(--accent)';
+      el.onmouseleave = () => el.style.color = 'var(--text)';
+  });
+  
+  // Grid
+  const grid = $('file-manager-grid');
+  grid.innerHTML = '';
+  
+  const foldersHere = allFolders.filter(f => f.parent_id === currentFolderId);
+  const sessionsHere = allSessions.filter(s => s.folder_id === currentFolderId);
+  
+  if(foldersHere.length === 0 && sessionsHere.length === 0) {
+      grid.innerHTML = '<div class="empty-state" style="grid-column:1/-1;">This folder is empty.</div>';
+      return;
+  }
+  
+  foldersHere.forEach(f => {
+      const c = document.createElement('div');
+      c.style.cssText = 'background:var(--surface2); border:1px solid var(--border); border-radius:16px; padding:20px; cursor:pointer; transition:all .2s; display:flex; align-items:center; gap:16px; user-select:none; position:relative;';
+      c.innerHTML = `
+        <div style="font-size:32px;">📁</div>
+        <div style="font-size:16px; font-weight:700; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${f.name}</div>
+        <button class="btn-ghost" style="position:absolute; right:10px; top:10px; padding:4px 8px; font-size:12px; opacity:0; transition:opacity .2s;" onclick="event.stopPropagation(); deleteFolder('${f.id}')">✕</button>
+      `;
+      c.onmouseenter = () => { c.style.borderColor = 'var(--accent)'; c.style.transform = 'translateY(-2px)'; c.querySelector('button').style.opacity = '1'; };
+      c.onmouseleave = () => { c.style.borderColor = 'var(--border)'; c.style.transform = 'translateY(0)'; c.querySelector('button').style.opacity = '0'; };
+      c.onclick = () => { currentFolderId = f.id; renderFileManager(); };
+      grid.appendChild(c);
+  });
+  
+  sessionsHere.forEach(s => {
     const c = document.createElement('div');
     c.className = 'sess-card';
     const dotCls = { active: 'active', ended: 'ended', paused: 'paused' }[s.status] || '';
@@ -96,17 +192,135 @@ function renderSessionList(list) {
       <div class="sess-card-status">
         <span class="sess-status-dot ${dotCls}"></span>${s.status.toUpperCase()}
       </div>
-      <div class="sess-card-title">${s.title}</div>
+      <div class="sess-card-title" style="margin-top:12px;">${s.title}</div>
       <div class="sess-card-code">${s.session_code || '—'}</div>
       <div class="sess-card-meta">
         <span>📋 ${s.question_count} questions</span>
         <span>👥 ${s.student_count} students</span>
-        <span>${new Date(s.created_at).toLocaleDateString()}</span>
       </div>`;
     c.onclick = () => openSession(s.id);
-    el.appendChild(c);
+    grid.appendChild(c);
   });
 }
+
+$('btn-new-folder').onclick = async () => {
+    const name = prompt("Enter folder name:");
+    if(!name) return;
+    try {
+        const r = await fetch(`${API}/api/admin/folders?token=${token}`, {
+            method: 'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({name, parent_id: currentFolderId})
+        });
+        if(r.ok) loadData();
+    } catch { toast('Error creating folder', 'err'); }
+};
+
+async function deleteFolder(id) {
+    if(!(await confirmAsync('Delete Folder', 'Are you sure you want to delete this folder?', true))) return;
+    try {
+        const r = await fetch(`${API}/api/admin/folders/${id}?token=${token}`, { method: 'DELETE' });
+        if(r.ok) loadData();
+        else toast('Failed to delete folder', 'err');
+    } catch { toast('Network error', 'err'); }
+}
+
+// Global Search
+$('global-search').oninput = (e) => {
+    const val = e.target.value.trim();
+    if(val === '') {
+        $('global-search-clear').style.display = 'none';
+        renderFileManager();
+    } else {
+        $('global-search-clear').style.display = 'block';
+        doGlobalSearch();
+    }
+};
+
+$('global-search-clear').onclick = () => {
+    $('global-search').value = '';
+    $('global-search-clear').style.display = 'none';
+    renderFileManager();
+};
+
+async function doGlobalSearch() {
+    const q = $('global-search').value.trim().toLowerCase();
+    if(!q) return;
+    
+    $('fm-container').style.display = 'none';
+    $('global-search-results').style.display = 'flex';
+    
+    // Filter sessions
+    const sGrid = $('gs-sessions');
+    sGrid.innerHTML = '';
+    const matchSess = allSessions.filter(s => s.title.toLowerCase().includes(q) || (s.session_code||'').toLowerCase().includes(q));
+    if(matchSess.length === 0) sGrid.innerHTML = '<div style="color:var(--text3); font-size:14px; grid-column:1/-1;">No matching exams.</div>';
+    else {
+        matchSess.forEach(s => {
+            const c = document.createElement('div');
+            c.className = 'sess-card';
+            const dotCls = { active: 'active', ended: 'ended', paused: 'paused' }[s.status] || '';
+            c.innerHTML = `
+              <div class="sess-card-status">
+                <span class="sess-status-dot ${dotCls}"></span>${s.status.toUpperCase()}
+              </div>
+              <div class="sess-card-title" style="margin-top:12px;">${s.title}</div>
+              <div class="sess-card-code">${s.session_code || '—'}</div>
+              <div class="sess-card-meta">
+                <span>📋 ${s.question_count} questions</span>
+                <span>👥 ${s.student_count} students</span>
+              </div>`;
+            c.onclick = () => { $('global-search-clear').click(); openSession(s.id); };
+            sGrid.appendChild(c);
+        });
+    }
+    
+    // Search students
+    const stGrid = $('gs-students');
+    stGrid.innerHTML = '<div style="color:var(--text3); font-size:14px;">Searching students...</div>';
+    try {
+        const r = await fetch(`${API}/api/admin/students/search?token=${token}&name=${encodeURIComponent(q)}`);
+        if(!r.ok) throw new Error();
+        const results = await r.json();
+        
+        if(results.length === 0) {
+            stGrid.innerHTML = '<div style="color:var(--text3); font-size:14px;">No matching students.</div>';
+        } else {
+            stGrid.innerHTML = '';
+            results.forEach(stu => {
+                const totalViol = stu.sessions.reduce((a, s) => a + s.violations.length, 0);
+                const c = document.createElement('div');
+                c.style.cssText = 'background:var(--surface2); border:1px solid var(--border); border-radius:16px; padding:24px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; transition:all .2s;';
+                c.onmouseenter = () => { c.style.borderColor = 'var(--accent)'; };
+                c.onmouseleave = () => { c.style.borderColor = 'var(--border)'; };
+                c.innerHTML = `
+                    <div style="flex:1;">
+                        <div style="font-size:18px; font-weight:800; letter-spacing:-0.5px; color:var(--text);">${stu.name}</div>
+                        <div style="font-size:13px; color:var(--text3); font-family:monospace; margin-top:4px;">Roll: ${stu.roll_number}</div>
+                    </div>
+                    <div style="display:flex; gap:24px; flex-wrap:wrap;">
+                        <div style="text-align:right;">
+                            <div style="font-size:20px; font-weight:900; color:var(--accent);">${stu.total_sessions}</div>
+                            <div style="font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:1px;">Exams</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:20px; font-weight:900; color:var(--green);">${stu.total_score}</div>
+                            <div style="font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:1px;">Score</div>
+                        </div>
+                        <div style="text-align:right;">
+                            <div style="font-size:20px; font-weight:900; color:${totalViol > 0 ? 'var(--red)' : 'var(--text3)'};">${totalViol}</div>
+                            <div style="font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:1px;">Violations</div>
+                        </div>
+                    </div>
+                `;
+                stGrid.appendChild(c);
+            });
+        }
+    } catch {
+        stGrid.innerHTML = '<div style="color:var(--red); font-size:14px;">Error searching students.</div>';
+    }
+}
+
 
 // ════════════════════════════════════════════════════════════════════
 //  CREATE SESSION MODAL
@@ -197,7 +411,8 @@ $('btn-submit-create').onclick = async () => {
         questions: draftQs,
         randomize_questions: false,
         randomize_options: false,
-        pacing_mode: $('m-pacing').value
+        pacing_mode: $('m-pacing').value,
+        folder_id: currentFolderId,
       }),
     });
     const data = await r.json();
@@ -205,8 +420,8 @@ $('btn-submit-create').onclick = async () => {
     toast(`✅ Created — code: ${data.session_code}`, 'ok');
     $('modal-create').style.display = 'none';
     draftQs = [];
-    [$('m-title'), $('m-code')].forEach(el => el.value = '');
-    await loadSessions();
+    ['m-title', 'm-code'].forEach(id => $(id).value = '');
+    await loadData();
   } catch { toast('Network error', 'err'); }
   finally {
     $('btn-submit-create').disabled = false;
@@ -289,11 +504,11 @@ async function action(act) {
 $('btn-start').onclick  = () => action('start');
 $('btn-pause').onclick  = () => action('pause');
 $('btn-resume').onclick = () => action('resume');
-$('btn-end').onclick    = () => { if (confirm('End the exam for all students?')) action('end'); };
+$('btn-end').onclick    = async () => { if (await confirmAsync('End Exam', 'Are you sure you want to end the exam for all students?', true)) action('end'); };
 $('btn-export').onclick = () => window.open(`${API}/api/admin/sessions/${session.id}/export?token=${token}`);
 
 $('btn-delete-session').onclick = async () => {
-  if (!confirm('Are you sure you want to permanently delete this session?')) return;
+  if (!(await confirmAsync('Delete Session', 'Are you sure you want to permanently delete this session? This action cannot be undone.', true))) return;
   try {
     const r = await fetch(`${API}/api/admin/sessions/${session.id}?token=${token}`, { method: 'DELETE' });
     if (!r.ok) throw new Error();

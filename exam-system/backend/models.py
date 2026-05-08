@@ -9,6 +9,17 @@ def gen_uuid():
     return str(uuid.uuid4())
 
 
+class Folder(Base):
+    __tablename__ = "folders"
+    id = Column(String, primary_key=True, default=gen_uuid)
+    name = Column(String, nullable=False)
+    parent_id = Column(String, ForeignKey("folders.id", ondelete="CASCADE"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    subfolders = relationship("Folder", backref="parent", remote_side=[id], cascade="all, delete")
+    sessions = relationship("Session", back_populates="folder")
+
+
 class Session(Base):
     __tablename__ = "sessions"
     id = Column(String, primary_key=True, default=gen_uuid)
@@ -23,6 +34,9 @@ class Session(Base):
     randomize_options = Column(Boolean, default=True)
     max_strikes = Column(Integer, default=3)
     pacing_mode = Column(String, default="auto")
+    class_name = Column(String, nullable=True)   # e.g. "B.Tech 23", "MCA 24"
+    category = Column(String, nullable=True)     # e.g. "Unit Test", "Mid Sem"
+    folder_id = Column(String, ForeignKey("folders.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     started_at = Column(DateTime, nullable=True)
     ended_at = Column(DateTime, nullable=True)
@@ -32,6 +46,7 @@ class Session(Base):
     questions = relationship("Question", back_populates="session", cascade="all, delete")
     submissions = relationship("Submission", back_populates="session", cascade="all, delete")
     violations = relationship("Violation", back_populates="session", cascade="all, delete")
+    folder = relationship("Folder", back_populates="sessions")
 
 
 class Student(Base):

@@ -321,73 +321,48 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
   box-shadow: 0 20px 60px rgba(0,0,0,.5);
   animation: toast-in .2s ease; max-width: 320px;
 }
-.toast.ok { border-left: 3px solid var(--green); }
 .toast.err { border-left: 3px solid var(--red); }
 .toast.info { border-left: 3px solid var(--blue); }
 @keyframes toast-in { from { opacity:0; transform: translateY(12px); } to { opacity:1; transform: none; } }
 
-/* ── Students Grid ──────────────────────────────────────────────────*/
-.students-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 12px;
-}
-.stu-card {
-  background: var(--surface2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 16px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.stu-card:hover { transform: translateY(-2px); border-color: var(--accent); }
-.stu-card.v-1 { border-color: var(--accent); }
-.stu-card.v-2 { border-color: var(--accent); background: rgba(245, 158, 11, 0.1); }
-.stu-card.v-3 { border-color: var(--red); background: rgba(239, 68, 68, 0.1); }
 
-.stu-card-name { font-weight: 700; font-size: 14px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stu-card-viol { font-size: 11px; font-weight: 800; margin-top: 8px; }
-.stu-card-viol.v-0 { color: var(--green); }
-.stu-card-viol.v-1, .stu-card-viol.v-2 { color: var(--accent); }
-.stu-card-viol.v-3 { color: var(--red); }
-
-/* ── Mobile Responsiveness ──────────────────────────────────────────*/
-@media (max-width: 900px) {
-  #screen-control {
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-  }
-  .ctrl-left {
-    padding: 24px;
-    gap: 24px;
-    overflow-y: visible;
-  }
-  .ctrl-right {
-    border-left: none;
-    border-top: 1px solid var(--border);
-    flex: 0 0 auto;
-    overflow: visible;
-  }
-  .stats-row {
-    flex-direction: column;
-  }
-  .sessions-header {
-    flex-direction: column;
-    gap: 16px;
-  }
-  .sessions-grid {
-    grid-template-columns: 1fr;
-  }
-  .cur-q-card {
-    padding: 20px;
-  }
-  .add-q-block {
-    padding: 20px;
-  }
-  .field-row {
-    grid-template-columns: 1fr;
-  }
+/* ── Sessions Filter Bar ────────────────────────────────────────────*/
+.sessions-header-actions { display: flex; align-items: center; gap: 12px; }
+.sessions-filter-bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 24px; padding: 16px 20px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
 }
+.filter-search-wrap {
+  flex: 1; min-width: 180px; display: flex; align-items: center; gap: 10px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 14px; transition: border-color .15s;
+}
+.filter-search-wrap:focus-within { border-color: var(--accent); }
+.filter-icon { font-size: 14px; flex-shrink: 0; opacity: 0.5; }
+.filter-search-wrap input {
+  flex: 1; background: transparent; border: none; outline: none;
+  color: var(--text); font-size: 14px; font-family: inherit;
+}
+#sess-date {
+  padding: 10px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; color: var(--text); font-size: 14px; font-family: inherit;
+  outline: none; cursor: pointer; transition: border-color .15s;
+}
+#sess-date:focus { border-color: var(--accent); }
+#sess-class-filter, #sess-cat-filter {
+  padding: 10px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; color: var(--text); font-size: 14px; font-family: inherit;
+  outline: none; cursor: pointer; transition: border-color .15s;
+}
+#sess-class-filter:focus, #sess-cat-filter:focus { border-color: var(--accent); }
 
+/* ── Class Tabs ─────────────────────────────────────────────────────*/
+.class-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+.class-tab {
+  padding: 8px 20px; border-radius: 20px; font-size: 13px; font-weight: 700;
+  cursor: pointer; transition: all .15s; border: 1px solid var(--border);
+  background: transparent; color: var(--text3); font-family: inherit;
+}
+.class-tab:hover { border-color: var(--accent); color: var(--accent); }
+.class-tab.active { background: var(--accent); color: #000; border-color: var(--accent); }

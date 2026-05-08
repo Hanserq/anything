@@ -16,8 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 
 from database import get_db
-from models import Session, Student, Question, Violation, Result
-from schemas import SessionCreate, QuestionAddBatch
+from models import Session, Student, Question, Violation, Result, Folder
+from schemas import SessionCreate, QuestionAddBatch, FolderCreate
 from session_manager import session_manager
 from ws_manager import ws_manager
 from buffer import submission_buffer
@@ -32,6 +32,43 @@ def verify_admin(token: str):
     if token != ADMIN_TOKEN:
         raise HTTPException(status_code=403, detail="Invalid admin token")
 
+
+# ── Folders ───────────────────────────────────────────────────────────────────
+
+@router.post("/folders")
+async def create_folder(body: FolderCreate, token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    verify_admin(token)
+    folder = Folder(name=body.name, parent_id=body.parent_id)
+    db.add(folder)
+    await db.commit()
+    return {"id": folder.id, "name": folder.name, "parent_id": folder.parent_id}
+
+@router.get("/folders")
+async def list_folders(token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    verify_admin(token)
+    result = await db.execute(select(Folder))
+    folders = result.scalars().all()
+    return [{"id": f.id, "name": f.name, "parent_id": f.parent_id} for f in folders]
+
+@router.delete("/folders/{folder_id}")
+async def delete_folder(folder_id: str, token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    verify_admin(token)
+    f = await db.get(Folder, folder_id)
+    if not f:
+        raise HTTPException(404, "Folder not found")
+    await db.delete(f)
+    await db.commit()
+    return {"status": "deleted"}
+
+@router.put("/folders/{folder_id}")
+async def rename_folder(folder_id: str, body: dict, token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    verify_admin(token)
+    f = await db.get(Folder, folder_id)
+    if not f:
+        raise HTTPException(404, "Folder not found")
+    f.name = body.get("name", f.name)
+    await db.commit()
+    return {"id": f.id, "name": f.name, "parent_id": f.parent_id}
 
 # ── Session CRUD ──────────────────────────────────────────────────────────────
 
@@ -63,6 +100,9 @@ async def create_session(body: SessionCreate, db: AsyncSession = Depends(get_db)
         randomize_options=body.randomize_options,
         max_strikes=body.max_strikes,
         pacing_mode=body.pacing_mode,
+        class_name=body.class_name,
+        category=body.category,
+        folder_id=body.folder_id,
     )
     db.add(sess)
     await db.flush()
@@ -97,6 +137,8 @@ async def list_sessions(token: str = Query(...), db: AsyncSession = Depends(get_
         out.append({
             "id": s.id, "session_code": s.session_code, "title": s.title,
             "description": s.description, "status": s.status,
+            "class_name": s.class_name, "category": s.category,
+            "folder_id": s.folder_id,
             "created_at": s.created_at.isoformat(),
             "student_count": len(stud_r.scalars().all()),
             "question_count": len(q_r.scalars().all()),
@@ -124,6 +166,8 @@ async def get_session(session_id: str, token: str = Query(...),
         "id": sess.id, "session_code": sess.session_code,
         "title": sess.title, "description": sess.description,
         "status": sess.status,
+        "class_name": sess.class_name, "category": sess.category,
+        "folder_id": sess.folder_id,
         "per_question_time": sess.per_question_time,
         "time_limit": sess.time_limit,
         "randomize_questions": sess.randomize_questions,
@@ -239,6 +283,11 @@ async def start_session(session_id: str, token: str = Query(...),
                      .values(status="active", started_at=datetime.utcnow()))
     await db.commit()
 
+    # Update in-memory state to active  ← THIS WAS THE BUG
+    live_state = session_manager.get_session(session_id)
+    if live_state:
+        live_state["status"] = "active"
+
     await ws_manager.broadcast_all(session_id, {
         "type": "session_start",
         "data": {"session_id": session_id, "title": sess.title,
@@ -246,26 +295,36 @@ async def start_session(session_id: str, token: str = Query(...),
     })
 
     state = session_manager.get_session(session_id)
-    if state and state["config"].get("pacing_mode", "auto") == "auto":
-        # Push Q1 to everyone connected
-        for student_id, st in state["students"].items():
-            st.current_index = 0
-            nxt_q = session_manager.get_student_question(session_id, student_id)
-            if nxt_q:
-                await ws_manager.send_to_student(session_id, student_id, {
-                    "type": "question_push",
-                    "data": {
-                        "question_id": nxt_q.question_id,
-                        "index": nxt_q.index,
-                        "total": len(state["questions"]),
-                        "text": nxt_q.text,
-                        "options": nxt_q.options,
-                        "time_limit": nxt_q.time_limit,
-                        "start_time": time.time(),
-                        "question_type": nxt_q.question_type,
-                        "pacing_mode": "auto",
-                    }
-                })
+    if state:
+        # Push Q1 to each connected student via background task so the HTTP
+        # handler returns immediately — avoids concurrent WS send races.
+        async def push_q1_to_all():
+            await asyncio.sleep(0.1)   # tiny delay to let HTTP response flush
+            s = session_manager.get_session(session_id)
+            if not s:
+                return
+            for sid in list(s["students"].keys()):
+                st = s["students"].get(sid)
+                if st:
+                    st.current_index = 0
+                nxt_q = session_manager.get_student_question(session_id, sid)
+                if nxt_q:
+                    await ws_manager.send_to_student(session_id, sid, {
+                        "type": "question_push",
+                        "data": {
+                            "question_id": nxt_q.question_id,
+                            "index": nxt_q.index,
+                            "total": len(s["questions"]),
+                            "text": nxt_q.text,
+                            "options": nxt_q.options,
+                            "time_limit": nxt_q.time_limit,
+                            "start_time": time.time(),
+                            "question_type": nxt_q.question_type,
+                            "pacing_mode": "auto",
+                        }
+                    })
+        asyncio.create_task(push_q1_to_all())
+
     return {"status": "active"}
 
 
@@ -503,3 +562,73 @@ async def export_results(session_id: str, token: str = Query(...),
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=results_{session_id}.csv"}
     )
+
+
+# ── Student Search ────────────────────────────────────────────────────────────
+
+@router.get("/students/search")
+async def search_students(
+    token: str = Query(...),
+    name: str = Query(default=""),
+    roll: str = Query(default=""),
+    db: AsyncSession = Depends(get_db)
+):
+    verify_admin(token)
+    if not name and not roll:
+        return []
+
+    stmt = select(Student)
+    if name:
+        stmt = stmt.where(Student.name.ilike(f"%{name}%"))
+    if roll:
+        stmt = stmt.where(Student.roll_number.ilike(f"%{roll}%"))
+    result = await db.execute(stmt.order_by(Student.joined_at.desc()))
+    students = result.scalars().all()
+
+    out = []
+    seen_keys = set()  # deduplicate by (name, roll_number)
+    for s in students:
+        key = (s.name.lower(), s.roll_number.lower())
+        # Build a grouped record per unique student identity
+        found = next((x for x in out if x["roll_number"].lower() == s.roll_number.lower()
+                      and x["name"].lower() == s.name.lower()), None)
+
+        sess = await db.get(Session, s.session_id)
+        viol_r = await db.execute(
+            select(Violation).where(
+                Violation.student_id == s.id,
+                Violation.session_id == s.session_id
+            )
+        )
+        viols = viol_r.scalars().all()
+
+        session_entry = {
+            "session_id": s.session_id,
+            "session_title": sess.title if sess else "?",
+            "session_code": sess.session_code if sess else "?",
+            "class_name": sess.class_name if sess else None,
+            "category": sess.category if sess else None,
+            "status": s.status,
+            "score": s.score,
+            "correct_count": s.correct_count,
+            "strike_count": s.strike_count,
+            "violations": [{"type": v.violation_type, "at": v.occurred_at.isoformat()} for v in viols],
+            "joined_at": s.joined_at.isoformat() if s.joined_at else None,
+        }
+
+        if found:
+            found["sessions"].append(session_entry)
+            found["total_sessions"] = len(found["sessions"])
+            found["total_score"] = round(sum(x["score"] for x in found["sessions"]), 1)
+            found["total_violations"] = sum(len(x["violations"]) for x in found["sessions"])
+        else:
+            out.append({
+                "name": s.name,
+                "roll_number": s.roll_number,
+                "total_sessions": 1,
+                "total_score": round(s.score, 1),
+                "total_violations": len(viols),
+                "sessions": [session_entry],
+            })
+
+    return out

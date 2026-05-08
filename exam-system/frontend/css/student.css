@@ -239,3 +239,4 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
 .toast.ok   { border-left: 3px solid var(--green); color: var(--green); }
 .toast.err  { border-left: 3px solid var(--red);   color: var(--red); }
 .toast.info { border-left: 3px solid var(--accent); }
+

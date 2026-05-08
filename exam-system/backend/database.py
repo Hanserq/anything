@@ -34,8 +34,14 @@ async def init_db():
         await conn.execute(text("PRAGMA cache_size=10000"))
         await conn.execute(text("PRAGMA foreign_keys=ON"))
         await conn.run_sync(ModelBase.metadata.create_all)
-        # Non-destructive migration for new column
-        try:
-            await conn.execute(text("ALTER TABLE sessions ADD COLUMN session_code TEXT"))
-        except Exception:
-            pass  # Column already exists
+        # Non-destructive migrations for new columns
+        for col_sql in [
+            "ALTER TABLE sessions ADD COLUMN session_code TEXT",
+            "ALTER TABLE sessions ADD COLUMN class_name TEXT",
+            "ALTER TABLE sessions ADD COLUMN category TEXT",
+            "ALTER TABLE sessions ADD COLUMN folder_id TEXT",
+        ]:
+            try:
+                await conn.execute(text(col_sql))
+            except Exception:
+                pass  # Column already exists

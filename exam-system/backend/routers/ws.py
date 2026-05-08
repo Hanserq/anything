@@ -164,8 +164,8 @@ async def student_ws(session_id: str, ws: WebSocket,
                 await _handle_violation(session_id, student_id, data, db)
 
             elif msg_type == "heartbeat":
-                await ws.send_json({"type": "heartbeat_ack",
-                                    "server_time": time.time()})
+                await ws_manager.send_to_student(session_id, student_id,
+                    {"type": "heartbeat_ack", "server_time": time.time()})
 
             elif msg_type == "sync_cached":
                 # Student sending cached answers after reconnect
@@ -174,7 +174,7 @@ async def student_ws(session_id: str, ws: WebSocket,
                                          is_cached=True)
 
     except WebSocketDisconnect:
-        ws_manager.disconnect_student(session_id, student_id)
+        await ws_manager.disconnect_student(session_id, student_id)
         mem_st = session_manager.get_student(session_id, student_id)
         if mem_st and mem_st.status not in ("locked", "submitted"):
             mem_st.status = "disconnected"
@@ -218,6 +218,7 @@ async def _handle_submit(session_id: str, student_id: str, data: dict,
 
     # Notify admin of live stats + student's new score
     state = session_manager.get_session(session_id)
+    answering_student = None
     if state:
         answered = sum(
             1 for st in state["students"].values()
@@ -235,20 +236,24 @@ async def _handle_submit(session_id: str, student_id: str, data: dict,
             }
         })
 
-    # Auto pacing
-    if answering_student:
+    # Auto pacing: schedule the next question push for this individual student
+    if state and answering_student:
         import asyncio
+        # Capture stable references so the async closure is safe
+        _session_id  = session_id
+        _student_id  = student_id
+        _total       = len(state["questions"])
+
         async def push_next():
             await asyncio.sleep(0.6)
-            nxt_q = session_manager.get_student_question(session_id, student_id)
+            nxt_q = session_manager.get_student_question(_session_id, _student_id)
             if nxt_q:
-                # We do not broadcast to all, just this student
-                await ws_manager.send_to_student(session_id, student_id, {
+                await ws_manager.send_to_student(_session_id, _student_id, {
                     "type": "question_push",
                     "data": {
                         "question_id": nxt_q.question_id,
                         "index": nxt_q.index,
-                        "total": len(state["questions"]),
+                        "total": _total,
                         "text": nxt_q.text,
                         "options": nxt_q.options,
                         "time_limit": nxt_q.time_limit,
@@ -258,9 +263,14 @@ async def _handle_submit(session_id: str, student_id: str, data: dict,
                     }
                 })
             else:
-                await ws_manager.send_to_student(session_id, student_id, {
+                # Student finished all questions — send final leaderboard
+                board = session_manager.compute_leaderboard(_session_id)
+                await ws_manager.send_to_student(_session_id, _student_id, {
                     "type": "exam_end",
-                    "data": {"message": "You have completed all questions!"}
+                    "data": {
+                        "message": "You have completed all questions!",
+                        "leaderboard": board,
+                    }
                 })
         asyncio.create_task(push_next())
 

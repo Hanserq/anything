@@ -23,7 +23,14 @@ class SessionCreate(BaseModel):
     randomize_options: bool = True
     max_strikes: int = 3
     pacing_mode: str = "auto"
+    class_name: Optional[str] = None
+    category: Optional[str] = None
+    folder_id: Optional[str] = None
     questions: List[QuestionCreate] = []
+
+class FolderCreate(BaseModel):
+    name: str
+    parent_id: Optional[str] = None
 
 
 class SessionInfo(BaseModel):

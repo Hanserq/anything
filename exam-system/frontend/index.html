@@ -7,6 +7,7 @@
 <meta name="theme-color" content="#0c0c0c"/>
 <link rel="manifest" href="/manifest.json"/>
 <link rel="stylesheet" href="/css/student.css"/>
+<link rel="stylesheet" href="/css/modal-shared.css"/>
 </head>
 <body>
 
@@ -28,6 +29,9 @@
       <input id="inp-roll" type="text" placeholder="Roll Number" autocomplete="off"/>
       <input id="inp-code" type="text" placeholder="JOIN CODE" autocomplete="off" autocapitalize="characters"/>
       <button class="btn-join" id="btn-join">Join Exam →</button>
+      <div style="margin-top: 15px; text-align: center;">
+        <button id="btn-reset-join" style="background:transparent; border:none; color:var(--text3); font-size:12px; cursor:pointer; text-decoration:underline; opacity:0.6;">Reset browser state</button>
+      </div>
     </div>
   </div>
 </div>
@@ -38,6 +42,10 @@
   <h2 id="wait-name">You're in!</h2>
   <p>Waiting for the teacher to start the exam…</p>
   <div class="wait-code-pill" id="wait-code"></div>
+  <button id="btn-leave" style="margin-top:24px; background:transparent; border:1px solid rgba(255,255,255,0.15); color:var(--text3); padding:10px 28px; border-radius:8px; font-size:13px; cursor:pointer; font-family:inherit; transition:all .2s;">✕ Leave Session</button>
+  <div style="margin-top: 15px; text-align: center;">
+    <button id="btn-reset-wait" style="background:transparent; border:none; color:var(--text3); font-size:12px; cursor:pointer; text-decoration:underline; opacity:0.6;">Reset browser state</button>
+  </div>
 </div>
 
 <!-- ── Question ───────────────────────────────────────────────────── -->
@@ -55,6 +63,12 @@
   <div class="q-body">
     <div class="q-text" id="q-text"></div>
     <div class="options-grid" id="options-grid"></div>
+    <!-- Feedback bar shown after answering -->
+    <div id="q-feedback" style="display:none; margin-top:20px; padding:16px 20px; border-radius:12px; text-align:center; font-size:18px; font-weight:800; letter-spacing:0.5px;"></div>
+    <!-- Manual skip (shown if stuck > 4s after answering) -->
+    <div id="q-skip-row" style="display:none; margin-top:16px; text-align:center;">
+      <button id="btn-skip" style="background:transparent; border:1px solid var(--border); color:var(--text2); padding:10px 28px; border-radius:8px; font-size:14px; cursor:pointer; font-family:inherit;">Skip → Next Question</button>
+    </div>
   </div>
 </div>
 
@@ -89,6 +103,18 @@
 </div>
 
 <div id="toasts"></div>
+
+<!-- Custom Confirm Modal -->
+<div id="confirm-modal" class="modal-overlay">
+  <div class="modal-card">
+    <h3 id="confirm-title">Confirm Action</h3>
+    <p id="confirm-msg">Are you sure you want to proceed?</p>
+    <div class="modal-btns">
+      <button id="confirm-cancel" class="modal-btn cancel">Cancel</button>
+      <button id="confirm-ok" class="modal-btn confirm">Confirm</button>
+    </div>
+  </div>
+</div>
 
 <script src="/js/ws-client.js"></script>
 <script src="/js/db.js"></script>
