@@ -10,8 +10,8 @@
   --surface:  #141414;
   --surface2: #1c1c1c;
   --border:   #2a2a2a;
-  --accent:   #f59e0b;
-  --accent-d: #d97706;
+  --accent:   #a855f7;
+  --accent-d: #9333ea;
   --green:    #10b981;
   --red:      #ef4444;
   --blue:     #6366f1;
@@ -19,6 +19,16 @@
   --text2:    #888;
   --text3:    #555;
   --radius:   14px;
+}
+
+[data-theme="light"] {
+  --bg:       #FFEFD5;
+  --surface:  #FFF8ED;
+  --surface2: #FFF1DF;
+  --border:   #E5D5BC;
+  --text:     #111111;
+  --text2:    #555555;
+  --text3:    #888888;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -47,7 +57,7 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
 }
 .token-input:focus { border-color: var(--accent); }
 .btn-primary {
-  width: 100%; padding: 18px; background: var(--accent); color: #000; font-weight: 800;
+  width: 100%; padding: 18px; background: var(--accent); color: #fff; font-weight: 800;
   font-size: 16px; border: none; border-radius: var(--radius); cursor: pointer;
   transition: all .2s; letter-spacing: .5px;
 }
@@ -91,7 +101,7 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
   font-size: 48px; font-weight: 900; letter-spacing: -2px;
 }
 .btn-accent {
-  padding: 14px 28px; background: var(--accent); color: #000; font-weight: 700;
+  padding: 14px 28px; background: var(--accent); color: #fff; font-weight: 700;
   font-size: 15px; border: none; border-radius: var(--radius); cursor: pointer;
   transition: all .2s; letter-spacing: .3px; font-family: inherit;
 }
@@ -205,7 +215,7 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
 .action-btn:not(:disabled):hover { transform: translateY(-2px); }
 .action-btn:not(:disabled):active { transform: translateY(0) scale(.98); }
 .action-btn.start  { background: var(--green); color: white; }
-.action-btn.next   { background: var(--accent); color: black; }
+.action-btn.next   { background: var(--accent); color: #fff; }
 .action-btn.pause  { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
 .action-btn.danger { background: var(--red); color: white; }
 .action-btn.export { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
@@ -283,7 +293,7 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
   font-weight: 600; font-family: inherit;
 }
 .btn-save {
-  flex: 2; padding: 14px; background: var(--accent); color: #000;
+  flex: 2; padding: 14px; background: var(--accent); color: #fff;
   border: none; border-radius: var(--radius); cursor: pointer; font-size: 15px;
   font-weight: 800; font-family: inherit; transition: background .15s;
 }
@@ -365,4 +375,4 @@ body { font-family: 'Inter', system-ui, sans-serif; font-size: 15px; }
   background: transparent; color: var(--text3); font-family: inherit;
 }
 .class-tab:hover { border-color: var(--accent); color: var(--accent); }
-.class-tab.active { background: var(--accent); color: #000; border-color: var(--accent); }
+.class-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }

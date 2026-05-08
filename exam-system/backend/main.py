@@ -32,14 +32,28 @@ async def lifespan(app: FastAPI):
     # Zeroconf mDNS Registration
     try:
         def get_ip():
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
-                s.connect(('8.8.8.8', 1))
-                return s.getsockname()[0]
+                # Try getting all IPs resolved by hostname
+                ips = socket.gethostbyname_ex(socket.gethostname())[2]
+                lan_ips = [ip for ip in ips if not ip.startswith("127.")]
+                if lan_ips:
+                    return lan_ips[0]
             except:
-                return '127.0.0.1'
-            finally:
-                s.close()
+                pass
+
+            # Fallback to UDP connect trick (using link-local or common private IPs)
+            for test_ip in ['10.255.255.255', '192.168.255.255', '172.31.255.255', '8.8.8.8']:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    s.connect((test_ip, 1))
+                    ip = s.getsockname()[0]
+                    if not ip.startswith("127."):
+                        return ip
+                except:
+                    pass
+                finally:
+                    s.close()
+            return '127.0.0.1'
 
         local_ip = get_ip()
         info = ServiceInfo(

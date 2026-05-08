@@ -17,6 +17,32 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["student"])
 
 
+def schedule_student_timer(session_id: str, student_id: str, question_id: str, time_limit: int):
+    """Schedules an auto-submission if the student does not answer within the time limit."""
+    if time_limit <= 0: return
+
+    async def _timer_task():
+        import asyncio
+        await asyncio.sleep(time_limit + 1) # Grace period
+        
+        state = session_manager.get_session(session_id)
+        if not state or state["status"] != "active": return
+        student = state["students"].get(student_id)
+        if not student or question_id in student.answered_ids: return
+        
+        # If student hasn't answered, force submit with -1
+        from database import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            await _handle_submit(session_id, student_id, {
+                "question_id": question_id,
+                "selected_option": -1,
+                "time_taken": time_limit
+            }, db)
+
+    import asyncio
+    asyncio.create_task(_timer_task())
+
+
 # ── Student join (REST) ───────────────────────────────────────────────────────
 
 @router.post("/api/student/join")
@@ -91,6 +117,11 @@ async def student_ws(session_id: str, ws: WebSocket,
     db_student = await db.get(Student, student_id)
     if not db_student or db_student.session_id != session_id:
         await ws.close(code=4002)
+        return
+
+    mem_student = session_manager.get_student(session_id, student_id)
+    if db_student.status == "locked" or (mem_student and mem_student.status == "locked"):
+        await ws.close(code=4004, reason="Student is locked")
         return
 
     await ws_manager.connect_student(session_id, student_id, ws)
@@ -237,7 +268,7 @@ async def _handle_submit(session_id: str, student_id: str, data: dict,
         })
 
     # Auto pacing: schedule the next question push for this individual student
-    if state and answering_student:
+    if state and answering_student and state["config"].get("pacing_mode") == "auto":
         import asyncio
         # Capture stable references so the async closure is safe
         _session_id  = session_id
@@ -248,6 +279,11 @@ async def _handle_submit(session_id: str, student_id: str, data: dict,
             await asyncio.sleep(0.6)
             nxt_q = session_manager.get_student_question(_session_id, _student_id)
             if nxt_q:
+                # Update server-side tracking
+                mem_st = session_manager.get_student(_session_id, _student_id)
+                if mem_st:
+                    mem_st.current_question_start_time = time.time()
+                    
                 await ws_manager.send_to_student(_session_id, _student_id, {
                     "type": "question_push",
                     "data": {
@@ -262,6 +298,7 @@ async def _handle_submit(session_id: str, student_id: str, data: dict,
                         "pacing_mode": "auto",
                     }
                 })
+                schedule_student_timer(_session_id, _student_id, nxt_q.question_id, nxt_q.time_limit)
             else:
                 # Student finished all questions — send final leaderboard
                 board = session_manager.compute_leaderboard(_session_id)
@@ -324,8 +361,8 @@ async def _handle_violation(session_id: str, student_id: str, data: dict,
 @router.websocket("/ws/admin/{session_id}")
 async def admin_ws(session_id: str, ws: WebSocket):
     token = ws.query_params.get("token")
-    import os
-    if token != os.getenv("ADMIN_TOKEN", "exam-admin-secret"):
+    from routers.admin import ADMIN_TOKEN
+    if token != ADMIN_TOKEN:
         await ws.close(code=4003)
         return
 

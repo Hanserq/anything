@@ -53,12 +53,12 @@ class ConnectionManager:
     """
     Manages all live WebSocket connections.
     Students: each has a StudentConnection with a dedicated send-pump.
-    Admins: low-traffic, direct send is fine.
+    Admins: also use a dedicated send-pump to avoid concurrent send errors.
     """
 
     def __init__(self):
         self._students: Dict[str, Dict[str, StudentConnection]] = {}
-        self._admins: Dict[str, Set[WebSocket]] = {}
+        self._admins: Dict[str, Set[StudentConnection]] = {}
 
     # ── Connect / disconnect ──────────────────────────────────────────────────
 
@@ -77,11 +77,18 @@ class ConnectionManager:
 
     async def connect_admin(self, session_id: str, ws: WebSocket):
         await ws.accept()
-        self._admins.setdefault(session_id, set()).add(ws)
+        conn = StudentConnection(ws)
+        conn.start_pump()
+        self._admins.setdefault(session_id, set()).add(conn)
         logger.info(f"Admin connected to session {session_id}")
 
     def disconnect_admin(self, session_id: str, ws: WebSocket):
-        self._admins.get(session_id, set()).discard(ws)
+        admin_set = self._admins.get(session_id, set())
+        to_remove = [c for c in admin_set if c.ws == ws]
+        for c in to_remove:
+            admin_set.discard(c)
+            # We don't await c.close() here as disconnect_admin isn't async
+            # The pump will naturally die if the WS is closed
 
     # ── Send helpers ──────────────────────────────────────────────────────────
 
@@ -95,14 +102,8 @@ class ConnectionManager:
         await asyncio.gather(*[c.send(msg) for c in conns], return_exceptions=True)
 
     async def broadcast_admins(self, session_id: str, msg: dict):
-        dead = []
-        for ws in list(self._admins.get(session_id, set())):
-            try:
-                await ws.send_json(msg)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect_admin(session_id, ws)
+        conns = list(self._admins.get(session_id, set()))
+        await asyncio.gather(*[c.send(msg) for c in conns], return_exceptions=True)
 
     async def broadcast_all(self, session_id: str, msg: dict):
         await self.broadcast_students(session_id, msg)

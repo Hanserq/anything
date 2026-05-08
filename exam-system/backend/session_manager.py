@@ -20,6 +20,7 @@ class StudentState:
     status: str = "joined"          # joined/active/disconnected/locked/submitted
     answered_ids: set = field(default_factory=set)
     current_index: int = 0
+    current_question_start_time: float = field(default_factory=time.time)
     joined_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
 
@@ -148,13 +149,26 @@ class SessionManager:
         if not q or q.question_id != question_id:
             return None
 
-        actual_option = q.option_map[selected_shuffled]
-        is_correct = (selected_shuffled == q.correct_shuffled_index)
+        if selected_shuffled < 0:
+            actual_option = -1
+            is_correct = False
+        else:
+            try:
+                actual_option = q.option_map[selected_shuffled]
+                is_correct = (selected_shuffled == q.correct_shuffled_index)
+            except IndexError:
+                actual_option = -1
+                is_correct = False
+
+        # Server-side time validation
+        server_elapsed = time.time() - getattr(student, "current_question_start_time", time.time())
+        # Client could be slightly slower due to network, so take the min, but enforce server bound
+        validated_time_taken = max(0.0, min(time_taken, server_elapsed))
 
         # Speed bonus: up to 3 extra points if answered in first 30% of time
         speed_bonus = 0.0
         if is_correct and q.time_limit > 0:
-            ratio = max(0, 1 - time_taken / q.time_limit)
+            ratio = max(0, 1 - validated_time_taken / q.time_limit)
             speed_bonus = round(ratio * 3, 2)
 
         score_awarded = (q.points + speed_bonus) if is_correct else 0.0
@@ -198,6 +212,11 @@ class SessionManager:
         q.start_time = time.time()
         state["current_question"] = q
         state["status"] = "active"
+        
+        # Update start_time for all students for validation
+        for st in state["students"].values():
+            st.current_question_start_time = q.start_time
+            
         return q
 
     def current_question(self, session_id: str) -> Optional[QuestionState]:
@@ -260,6 +279,20 @@ class SessionManager:
             "current_question_id": q.question_id if q else None,
             "leaderboard": state["leaderboard"],
             "leaderboard_version": state["leaderboard_version"],
+            "questions": [
+                {
+                    "question_id": q_obj.question_id,
+                    "index": q_obj.index,
+                    "text": q_obj.text,
+                    "options": q_obj.options,
+                    "option_map": q_obj.option_map,
+                    "correct_shuffled_index": q_obj.correct_shuffled_index,
+                    "points": q_obj.points,
+                    "time_limit": q_obj.time_limit,
+                    "question_type": q_obj.question_type,
+                }
+                for q_obj in state["questions"]
+            ],
             "students": {
                 sid: {
                     "score": st.score,
@@ -267,6 +300,9 @@ class SessionManager:
                     "strike_count": st.strike_count,
                     "status": st.status,
                     "answered_ids": list(st.answered_ids),
+                    "name": st.name,
+                    "roll_number": st.roll_number,
+                    "current_index": st.current_index,
                 }
                 for sid, st in state["students"].items()
             },
@@ -283,16 +319,37 @@ class SessionManager:
             await db.commit()
         logger.debug(f"Checkpoint saved for session {session_id}")
 
-    async def restore_from_checkpoint(self, session_id: str, cp_json: str,
-                                      questions: List[dict], config: dict):
+    async def restore_from_checkpoint(self, session_id: str, cp_json: str, config: dict):
         """Rebuild in-memory state from a saved checkpoint."""
         cp = json.loads(cp_json)
-        self.create_session(session_id, questions, config)
-        state = self._sessions[session_id]
-        state["status"] = cp.get("status", "waiting")
-        state["current_index"] = cp.get("current_index", -1)
-        state["leaderboard"] = cp.get("leaderboard", [])
-        state["leaderboard_version"] = cp.get("leaderboard_version", 0)
+        
+        prepared = []
+        for qdata in cp.get("questions", []):
+            prepared.append(QuestionState(
+                question_id=qdata["question_id"],
+                index=qdata["index"],
+                text=qdata["text"],
+                options=qdata["options"],
+                option_map=qdata["option_map"],
+                correct_shuffled_index=qdata["correct_shuffled_index"],
+                points=qdata["points"],
+                time_limit=qdata["time_limit"],
+                question_type=qdata.get("question_type", "mcq"),
+            ))
+
+        state = {
+            "session_id": session_id,
+            "status": cp.get("status", "waiting"),
+            "questions": prepared,
+            "current_index": cp.get("current_index", -1),
+            "current_question": None,
+            "students": {},
+            "leaderboard": cp.get("leaderboard", []),
+            "leaderboard_version": cp.get("leaderboard_version", 0),
+            "config": config,
+            "timer_task": None,
+        }
+        self._sessions[session_id] = state
 
         # Restore question pointer
         idx = state["current_index"]
@@ -300,13 +357,20 @@ class SessionManager:
             state["current_question"] = state["questions"][idx]
 
         for sid, sdata in cp.get("students", {}).items():
-            st = state["students"].get(sid)
-            if st:
-                st.score = sdata.get("score", 0.0)
-                st.correct_count = sdata.get("correct_count", 0)
-                st.strike_count = sdata.get("strike_count", 0)
-                st.status = sdata.get("status", "active")
-                st.answered_ids = set(sdata.get("answered_ids", []))
+            st = StudentState(
+                student_id=sid,
+                name=sdata.get("name", "?"),
+                roll_number=sdata.get("roll_number", "?"),
+                score=sdata.get("score", 0.0),
+                correct_count=sdata.get("correct_count", 0),
+                strike_count=sdata.get("strike_count", 0),
+                status=sdata.get("status", "active"),
+                answered_ids=set(sdata.get("answered_ids", [])),
+                current_index=sdata.get("current_index", 0)
+            )
+            state["students"][sid] = st
+            
+        self._start_checkpoint(session_id)
 
 
 # Singleton

@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 
 from database import get_db
 from models import Session, Student, Question, Violation, Result, Folder
-from schemas import SessionCreate, QuestionAddBatch, FolderCreate
+from schemas import SessionCreate, QuestionAddBatch, FolderCreate, AdminCreate, AdminUpdate
 from session_manager import session_manager
 from ws_manager import ws_manager
 from buffer import submission_buffer
@@ -27,17 +27,23 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "exam-admin-secret")
 
-
-def verify_admin(token: str):
-    if token != ADMIN_TOKEN:
+async def verify_admin(token: str, db: AsyncSession):
+    from models import Admin
+    result = await db.execute(select(Admin).where(Admin.token == token))
+    admin = result.scalar_one_or_none()
+    if not admin:
+        # Fallback for initial setup if no admins are in DB yet
+        if token == ADMIN_TOKEN:
+            return None
         raise HTTPException(status_code=403, detail="Invalid admin token")
+    return admin
 
 
 # ── Folders ───────────────────────────────────────────────────────────────────
 
 @router.post("/folders")
 async def create_folder(body: FolderCreate, token: str = Query(...), db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     folder = Folder(name=body.name, parent_id=body.parent_id)
     db.add(folder)
     await db.commit()
@@ -45,14 +51,14 @@ async def create_folder(body: FolderCreate, token: str = Query(...), db: AsyncSe
 
 @router.get("/folders")
 async def list_folders(token: str = Query(...), db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     result = await db.execute(select(Folder))
     folders = result.scalars().all()
     return [{"id": f.id, "name": f.name, "parent_id": f.parent_id} for f in folders]
 
 @router.delete("/folders/{folder_id}")
 async def delete_folder(folder_id: str, token: str = Query(...), db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     f = await db.get(Folder, folder_id)
     if not f:
         raise HTTPException(404, "Folder not found")
@@ -62,7 +68,7 @@ async def delete_folder(folder_id: str, token: str = Query(...), db: AsyncSessio
 
 @router.put("/folders/{folder_id}")
 async def rename_folder(folder_id: str, body: dict, token: str = Query(...), db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     f = await db.get(Folder, folder_id)
     if not f:
         raise HTTPException(404, "Folder not found")
@@ -79,7 +85,7 @@ def _gen_code():
 
 @router.post("/sessions")
 async def create_session(body: SessionCreate, db: AsyncSession = Depends(get_db)):
-    verify_admin(body.admin_token)
+    await verify_admin(body.admin_token, db)
 
     # Use custom code or auto-generate
     code = (body.session_code or "").strip().upper().replace(" ", "-") or _gen_code()
@@ -108,6 +114,8 @@ async def create_session(body: SessionCreate, db: AsyncSession = Depends(get_db)
     await db.flush()
 
     for idx, qdata in enumerate(body.questions):
+        if not (0 <= qdata.correct_index < len(qdata.options)):
+            raise HTTPException(status_code=400, detail=f"Invalid correct_index for question {idx}")
         q = Question(
             session_id=sess.id,
             index=idx,
@@ -127,21 +135,36 @@ async def create_session(body: SessionCreate, db: AsyncSession = Depends(get_db)
 
 @router.get("/sessions")
 async def list_sessions(token: str = Query(...), db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
-    result = await db.execute(select(Session).order_by(Session.created_at.desc()))
-    sessions = result.scalars().all()
+    await verify_admin(token, db)
+    from sqlalchemy import func
+    
+    # Bug 6 Fix: Use JOINs and GROUP BY to get counts in a single query
+    stmt = (
+        select(
+            Session,
+            func.count(Student.id.distinct()).label("student_count"),
+            func.count(Question.id.distinct()).label("question_count")
+        )
+        .outerjoin(Student, Session.id == Student.session_id)
+        .outerjoin(Question, Session.id == Question.session_id)
+        .group_by(Session.id)
+        .order_by(Session.created_at.desc())
+    )
+    
+    result = await db.execute(stmt)
+    rows = result.all()
+    
     out = []
-    for s in sessions:
-        stud_r = await db.execute(select(Student).where(Student.session_id == s.id))
-        q_r = await db.execute(select(Question).where(Question.session_id == s.id))
+    for row in rows:
+        s = row.Session
         out.append({
             "id": s.id, "session_code": s.session_code, "title": s.title,
             "description": s.description, "status": s.status,
             "class_name": s.class_name, "category": s.category,
             "folder_id": s.folder_id,
             "created_at": s.created_at.isoformat(),
-            "student_count": len(stud_r.scalars().all()),
-            "question_count": len(q_r.scalars().all()),
+            "student_count": row.student_count,
+            "question_count": row.question_count,
         })
     return out
 
@@ -149,7 +172,7 @@ async def list_sessions(token: str = Query(...), db: AsyncSession = Depends(get_
 @router.get("/sessions/{session_id}")
 async def get_session(session_id: str, token: str = Query(...),
                       db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     sess = await db.get(Session, session_id)
     if not sess:
         raise HTTPException(404, "Session not found")
@@ -161,6 +184,24 @@ async def get_session(session_id: str, token: str = Query(...),
     questions = q_r.scalars().all()
 
     live_state = session_manager.get_session(session_id)
+    
+    leaderboard = []
+    if sess.status == "ended":
+        r = await db.execute(select(Result).where(Result.session_id == session_id).order_by(Result.rank))
+        results = r.scalars().all()
+        for res in results:
+            s = next((st for st in students if st.id == res.student_id), None)
+            leaderboard.append({
+                "rank": res.rank,
+                "student_id": res.student_id,
+                "name": s.name if s else "?",
+                "roll_number": s.roll_number if s else "?",
+                "score": res.final_score,
+                "correct_count": res.correct_count,
+                "status": "submitted",
+            })
+    elif live_state:
+        leaderboard = live_state["leaderboard"]
 
     return {
         "id": sess.id, "session_code": sess.session_code,
@@ -188,7 +229,7 @@ async def get_session(session_id: str, token: str = Query(...),
             for q in questions
         ],
         "connected_count": ws_manager.connected_count(session_id),
-        "leaderboard": live_state["leaderboard"] if live_state else [],
+        "leaderboard": leaderboard,
         "current_question_index": live_state.get("current_index", -1) if live_state else -1,
         "total_questions": len(questions),
         "session_status_live": live_state["status"] if live_state else sess.status,
@@ -198,7 +239,7 @@ async def get_session(session_id: str, token: str = Query(...),
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, token: str = Query(...),
                          db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     sess = await db.get(Session, session_id)
     if not sess:
         raise HTTPException(404, "Session not found")
@@ -213,7 +254,7 @@ async def delete_session(session_id: str, token: str = Query(...),
 @router.post("/sessions/{session_id}/questions")
 async def add_questions(session_id: str, body: QuestionAddBatch,
                         db: AsyncSession = Depends(get_db)):
-    verify_admin(body.admin_token)
+    await verify_admin(body.admin_token, db)
     sess = await db.get(Session, session_id)
     if not sess:
         raise HTTPException(404, "Session not found")
@@ -224,6 +265,9 @@ async def add_questions(session_id: str, body: QuestionAddBatch,
     existing_count = len(q_r.scalars().all())
 
     for i, qdata in enumerate(body.questions):
+        if not (0 <= qdata.correct_index < len(qdata.options)):
+            raise HTTPException(status_code=400, detail=f"Invalid correct_index for question {i}")
+            
         q = Question(
             session_id=session_id, index=existing_count + i,
             text=qdata.text, options=qdata.options,
@@ -241,7 +285,7 @@ async def add_questions(session_id: str, body: QuestionAddBatch,
 @router.post("/sessions/{session_id}/start")
 async def start_session(session_id: str, token: str = Query(...),
                         db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     sess = await db.get(Session, session_id)
     if not sess:
         raise HTTPException(404)
@@ -271,7 +315,16 @@ async def start_session(session_id: str, token: str = Query(...),
     # Restore from checkpoint or fresh init
     if sess.checkpoint_data:
         await session_manager.restore_from_checkpoint(
-            session_id, sess.checkpoint_data, questions, config)
+            session_id, sess.checkpoint_data, config)
+        
+        # Reconcile DB with restored memory state to prevent score divergence (Bug 5)
+        state = session_manager.get_session(session_id)
+        if state:
+            for sid, st in state["students"].items():
+                await db.execute(update(Student).where(Student.id == sid)
+                                 .values(score=st.score, correct_count=st.correct_count,
+                                         strike_count=st.strike_count, status=st.status))
+            await db.commit()
     else:
         session_manager.create_session(session_id, questions, config)
         # Load all joined students from DB so they can answer
@@ -307,6 +360,7 @@ async def start_session(session_id: str, token: str = Query(...),
                 st = s["students"].get(sid)
                 if st:
                     st.current_index = 0
+                    st.current_question_start_time = time.time()
                 nxt_q = session_manager.get_student_question(session_id, sid)
                 if nxt_q:
                     await ws_manager.send_to_student(session_id, sid, {
@@ -323,6 +377,8 @@ async def start_session(session_id: str, token: str = Query(...),
                             "pacing_mode": "auto",
                         }
                     })
+                    from routers.ws import schedule_student_timer
+                    schedule_student_timer(session_id, sid, nxt_q.question_id, nxt_q.time_limit)
         asyncio.create_task(push_q1_to_all())
 
     return {"status": "active"}
@@ -331,7 +387,7 @@ async def start_session(session_id: str, token: str = Query(...),
 @router.post("/sessions/{session_id}/pause")
 async def pause_session(session_id: str, token: str = Query(...),
                         db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     state = session_manager.get_session(session_id)
     if state:
         state["status"] = "paused"
@@ -346,7 +402,7 @@ async def pause_session(session_id: str, token: str = Query(...),
 @router.post("/sessions/{session_id}/resume")
 async def resume_session(session_id: str, token: str = Query(...),
                          db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     state = session_manager.get_session(session_id)
     if state:
         state["status"] = "active"
@@ -361,7 +417,7 @@ async def resume_session(session_id: str, token: str = Query(...),
 @router.post("/sessions/{session_id}/next_question")
 async def push_next_question(session_id: str, token: str = Query(...),
                              db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     state = session_manager.get_session(session_id)
     if not state:
         raise HTTPException(400, "Session not loaded in memory. Start the session first.")
@@ -406,24 +462,63 @@ async def _end_question(session_id: str, question_id: str):
         return
 
     board = session_manager.compute_leaderboard(session_id)
-    await ws_manager.broadcast_all(session_id, {
+    payload = {
         "type": "question_end",
         "data": {
             "question_id": question_id,
             "correct_index": cq.correct_shuffled_index,
             "correct_text": cq.options[cq.correct_shuffled_index],
         }
-    })
+    }
+    if state["config"].get("pacing_mode") == "manual":
+        await ws_manager.broadcast_all(session_id, payload)
+    else:
+        await ws_manager.broadcast_admins(session_id, payload)
     await ws_manager.broadcast_all(session_id, {
         "type": "leaderboard_update",
         "version": state["leaderboard_version"],
         "data": board,
     })
 
+    # Bug Fix: If manual pacing, automatically advance to next question after a brief delay (Bug 1)
+    if state["config"].get("pacing_mode") == "manual":
+        async def auto_advance():
+            await asyncio.sleep(5)
+            # Check if session is still active
+            if state["status"] == "active":
+                nxt_q = session_manager.next_question(session_id)
+                if nxt_q:
+                    # Broadcast next question
+                    await ws_manager.broadcast_all(session_id, {
+                        "type": "question_push",
+                        "data": {
+                            "question_id": nxt_q.question_id,
+                            "text": nxt_q.text,
+                            "options": nxt_q.options,
+                            "index": nxt_q.index,
+                            "total": len(state["questions"]),
+                            "time_limit": nxt_q.time_limit,
+                            "points": nxt_q.points,
+                            "start_time": time.time(),
+                        }
+                    })
+                    # Re-schedule timer for the new question
+                    if nxt_q.time_limit > 0:
+                        async def next_auto_end():
+                            await asyncio.sleep(nxt_q.time_limit + 1)
+                            await _end_question(session_id, nxt_q.question_id)
+                        state["timer_task"] = asyncio.create_task(next_auto_end())
+                else:
+                    # No more questions, end session
+                    state["status"] = "ended"
+                    await ws_manager.broadcast_all(session_id, {"type": "exam_end"})
+        
+        asyncio.create_task(auto_advance())
+
 
 @router.post("/sessions/{session_id}/end_question")
-async def end_question(session_id: str, token: str = Query(...)):
-    verify_admin(token)
+async def end_question(session_id: str, token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    await verify_admin(token, db)
     state = session_manager.get_session(session_id)
     if not state or not state.get("current_question"):
         raise HTTPException(400, "No active question")
@@ -436,7 +531,7 @@ async def end_question(session_id: str, token: str = Query(...)):
 @router.post("/sessions/{session_id}/end")
 async def end_session(session_id: str, token: str = Query(...),
                       db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     state = session_manager.get_session(session_id)
     if state and state.get("timer_task"):
         state["timer_task"].cancel()
@@ -486,7 +581,7 @@ async def end_session(session_id: str, token: str = Query(...),
 @router.get("/sessions/{session_id}/violations")
 async def get_violations(session_id: str, token: str = Query(...),
                          db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     r = await db.execute(select(Violation).where(Violation.session_id == session_id)
                          .order_by(Violation.occurred_at.desc()))
     viols = r.scalars().all()
@@ -506,7 +601,7 @@ async def get_violations(session_id: str, token: str = Query(...),
 async def unlock_student(session_id: str, student_id: str = Query(...),
                          reduce_marks: float = Query(0.0),
                          token: str = Query(...), db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     student = session_manager.get_student(session_id, student_id)
     if student:
         student.status = "active"
@@ -522,6 +617,35 @@ async def unlock_student(session_id: str, student_id: str = Query(...),
         
     await ws_manager.send_to_student(session_id, student_id,
                                      {"type": "exam_unlocked", "data": {}})
+                                     
+    # Bug Fix: After unblocking, push the next question to the student (Bug 2)
+    # This prevents them from getting stuck on the violation page.
+    state = session_manager.get_session(session_id)
+    if student and state:
+        student.current_index += 1
+        nxt_q = session_manager.get_student_question(session_id, student_id)
+        if nxt_q:
+            student.current_question_start_time = time.time()
+            await ws_manager.send_to_student(session_id, student_id, {
+                "type": "question_push",
+                "data": {
+                    "question_id": nxt_q.question_id,
+                    "text": nxt_q.text,
+                    "options": nxt_q.options,
+                    "index": nxt_q.index,
+                    "total": len(state["questions"]),
+                    "time_limit": nxt_q.time_limit,
+                    "points": nxt_q.points,
+                    "start_time": time.time(),
+                    "pacing_mode": state["config"].get("pacing_mode", "auto"),
+                }
+            })
+            if state["config"].get("pacing_mode") == "auto":
+                from routers.ws import schedule_student_timer
+                schedule_student_timer(session_id, student_id, nxt_q.question_id, nxt_q.time_limit)
+        else:
+            student.status = "submitted"
+            await ws_manager.send_to_student(session_id, student_id, {"type": "exam_end"})
                                      
     board = session_manager.compute_leaderboard(session_id)
     state = session_manager.get_session(session_id)
@@ -539,7 +663,7 @@ async def unlock_student(session_id: str, student_id: str = Query(...),
 @router.get("/sessions/{session_id}/export")
 async def export_results(session_id: str, token: str = Query(...),
                          db: AsyncSession = Depends(get_db)):
-    verify_admin(token)
+    await verify_admin(token, db)
     r = await db.execute(select(Result).where(Result.session_id == session_id)
                          .order_by(Result.rank))
     results = r.scalars().all()
@@ -573,7 +697,7 @@ async def search_students(
     roll: str = Query(default=""),
     db: AsyncSession = Depends(get_db)
 ):
-    verify_admin(token)
+    await verify_admin(token, db)
     if not name and not roll:
         return []
 
@@ -632,3 +756,58 @@ async def search_students(
             })
 
     return out
+
+
+# ── Admin Management ──────────────────────────────────────────────────────────
+
+@router.get("/profiles")
+async def list_admins(token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    await verify_admin(token, db)
+    from models import Admin
+    result = await db.execute(select(Admin))
+    admins = result.scalars().all()
+    from schemas import AdminCreate, AdminUpdate
+    return [{"id": a.id, "username": a.username, "name": a.name, "role": a.role, "created_at": a.created_at.isoformat()} for a in admins]
+
+@router.post("/profiles")
+async def add_admin(body: AdminCreate, token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    await verify_admin(token, db)
+    from models import Admin
+    admin = Admin(
+        username=body.username,
+        token=body.token,
+        name=body.name,
+        role=body.role
+    )
+    db.add(admin)
+    await db.commit()
+    return {"id": admin.id, "username": admin.username}
+
+@router.put("/profiles/{admin_id}")
+async def update_admin(admin_id: str, body: AdminUpdate, token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    await verify_admin(token, db)
+    from models import Admin
+    admin = await db.get(Admin, admin_id)
+    if not admin:
+        raise HTTPException(404, "Admin not found")
+    
+    if body.username is not None: admin.username = body.username
+    if body.token is not None: admin.token = body.token
+    if body.name is not None: admin.name = body.name
+    if body.role is not None: admin.role = body.role
+    
+    await db.commit()
+    return {"status": "updated"}
+
+@router.delete("/profiles/{admin_id}")
+async def delete_admin(admin_id: str, token: str = Query(...), db: AsyncSession = Depends(get_db)):
+    await verify_admin(token, db)
+    from models import Admin
+    admin = await db.get(Admin, admin_id)
+    if not admin:
+        raise HTTPException(404, "Admin not found")
+    
+    await db.delete(admin)
+    await db.commit()
+    return {"status": "deleted"}
+

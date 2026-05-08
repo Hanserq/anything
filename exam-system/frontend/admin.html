@@ -26,6 +26,7 @@
   <header class="topbar">
     <div class="topbar-brand">Exam<span>LAN</span></div>
     <div class="topbar-sep"></div>
+    <button id="theme-toggle" style="background:var(--surface); border:1px solid var(--border); color:var(--text); padding:4px 8px; border-radius:12px; font-size:14px; cursor:pointer;" title="Toggle Theme">🌓</button>
     <div class="conn-dot" id="conn-dot">Offline</div>
     <button class="btn-ghost" id="btn-back" style="display:none">← Back</button>
     <button class="btn-ghost" id="btn-reset" style="opacity:.4;font-size:11px">Reset</button>
@@ -304,6 +305,20 @@
 </div>
 
 <script src="/js/ws-client.js"></script>
+<script>
+  // Theme Toggle Logic
+  const themeToggle = document.getElementById('theme-toggle');
+  if (localStorage.getItem('theme') === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+      document.documentElement.setAttribute('data-theme', isLight ? 'dark' : 'light');
+      localStorage.setItem('theme', isLight ? 'dark' : 'light');
+    });
+  }
+</script>
 <script src="/js/admin.js"></script>
 </body>
 </html>

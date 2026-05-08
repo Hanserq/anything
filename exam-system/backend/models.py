@@ -128,3 +128,14 @@ class Result(Base):
     violations_count = Column(Integer, default=0)
     completion_time = Column(Float, default=0.0)
     computed_at = Column(DateTime, default=datetime.utcnow)
+
+
+class Admin(Base):
+    __tablename__ = "admins"
+    id = Column(String, primary_key=True, default=gen_uuid)
+    username = Column(String, unique=True, nullable=False)
+    token = Column(String, unique=True, nullable=False)
+    name = Column(String, nullable=False)
+    role = Column(String, default="admin")
+    created_at = Column(DateTime, default=datetime.utcnow)
+

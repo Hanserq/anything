@@ -58,3 +58,18 @@ class StudentJoin(BaseModel):
 class QuestionAddBatch(BaseModel):
     admin_token: str
     questions: List[QuestionCreate]
+
+
+class AdminCreate(BaseModel):
+    username: str
+    token: str
+    name: str
+    role: str = "admin"
+
+
+class AdminUpdate(BaseModel):
+    username: Optional[str] = None
+    token: Optional[str] = None
+    name: Optional[str] = None
+    role: Optional[str] = None
+

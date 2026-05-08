@@ -64,9 +64,14 @@ class SubmissionBuffer:
             items = self._buffer.copy()
             self._buffer.clear()
 
-        await self._write_batch(items)
-        self._total_flushed += len(items)
-        logger.info(f"Flushed {len(items)} submissions (total={self._total_flushed})")
+        try:
+            await self._write_batch(items)
+            self._total_flushed += len(items)
+            logger.info(f"Flushed {len(items)} submissions (total={self._total_flushed})")
+        except Exception as e:
+            async with self._lock:
+                self._buffer = items + self._buffer
+            raise e
 
     async def _write_batch(self, items: List[dict]):
         from database import AsyncSessionLocal
